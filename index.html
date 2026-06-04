@@ -1754,14 +1754,9 @@ function initFirebaseListeners() {
     }
   });
 
-  db.ref('predictions').on('value', snap => {
-    const data = snap.val();
-    if (data) {
-      state.predictions = data;
-      saveState();
-      if (state.view === 'leaderboard') render();
-    }
-  });
+  // Predicciones: cada dispositivo escucha SOLO la suya (evita descargar
+  // todas las predicciones de todos en cada cambio = ahorra muchisimo ancho de banda)
+  subscribeMyPredictions();
 
   db.ref('config/apiKey').on('value', snap => {
     const key = snap.val();
@@ -1824,6 +1819,33 @@ function syncKnockout() {
 
 function syncKnockoutResults() {
   saveToFirebase('knockoutResults', state.knockoutResults);
+}
+
+// Escucha SOLO la prediccion del usuario actual (sincroniza sus dispositivos)
+let myPredRef = null;
+function subscribeMyPredictions() {
+  if (!firebaseReady || !state.currentUser) return;
+  if (myPredRef) myPredRef.off();
+  myPredRef = db.ref('predictions/' + state.currentUser.id);
+  myPredRef.on('value', snap => {
+    const data = snap.val();
+    if (data) {
+      state.predictions[state.currentUser.id] = data;
+      saveState();
+    }
+  });
+}
+
+// Carga TODAS las predicciones bajo demanda (solo para tabla/dashboard)
+function loadAllPredictions() {
+  if (!firebaseReady) return Promise.resolve();
+  return db.ref('predictions').once('value').then(snap => {
+    const data = snap.val();
+    if (data) {
+      state.predictions = { ...state.predictions, ...data };
+      saveState();
+    }
+  }).catch(e => console.error('loadAllPredictions:', e));
 }
 
 const ENTRY_FEE = 30000;
@@ -1975,6 +1997,13 @@ function navigate(view) {
   state.view = view;
   render();
   window.scrollTo({ top: 0, behavior: 'smooth' });
+
+  // Tabla y dashboard necesitan TODAS las predicciones: cargarlas bajo demanda
+  if ((view === 'leaderboard' || view === 'dashboard') && firebaseReady) {
+    loadAllPredictions().then(() => {
+      if (state.view === view) render();
+    });
+  }
 }
 
 function renderNav() {
@@ -2164,6 +2193,7 @@ async function register() {
   saveState();
   syncUser(user);
   syncPrediction(user.id);
+  subscribeMyPredictions();
   confetti();
   toast(`Bienvenido ${name}! ${user.isAdmin ? '(Admin)' : ''}`);
   navigate('dashboard');
@@ -2184,6 +2214,7 @@ async function login() {
 
   state.currentUser = user;
   saveState();
+  subscribeMyPredictions();
   toast(`Hola de vuelta, ${user.name}!`);
   navigate('dashboard');
 }
