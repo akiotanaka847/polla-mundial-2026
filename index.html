@@ -1539,6 +1539,24 @@ const ROUND_MULTIPLIER = {
   final: 4
 };
 
+// Rondas eliminatorias del Mundial 2026 (48 equipos = dieciseisavos extra)
+// apiStage = nombre del stage en football-data.org para importar cruces
+const KNOCKOUT_ROUNDS = [
+  { id: 'round32', name: 'Dieciseisavos', count: 16, apiStage: 'LAST_32', prev: null },
+  { id: 'round16', name: 'Octavos de Final', count: 8, apiStage: 'LAST_16', prev: 'round32' },
+  { id: 'quarters', name: 'Cuartos de Final', count: 4, apiStage: 'QUARTER_FINALS', prev: 'round16' },
+  { id: 'semis', name: 'Semifinales', count: 2, apiStage: 'SEMI_FINALS', prev: 'quarters' },
+  { id: 'final', name: 'Final', count: 1, apiStage: 'FINAL', prev: 'semis' }
+];
+
+// Puntos escalonados de eliminatorias (todo x multiplicador de ronda)
+const KO_POINTS = {
+  advance: 2,    // acertar quien pasa
+  score90: 5,    // marcador exacto 90 min
+  score120: 3,   // si va a alargue: marcador exacto 120 min
+  penalty: 3     // si va a penales: ganador correcto
+};
+
 const LOCK_HOURS = 6;
 // El campeon se debe elegir antes del primer partido del mundial
 const CHAMPION_DEADLINE = '2026-06-11T15:00:00Z'; // 6h antes del primer partido (11 jun 21:00 UTC)
@@ -1697,6 +1715,8 @@ let state = {
   predictions: {},
   results: {},
   approvedEmails: {},
+  knockout: {},          // { round32: { open, matches:[{id,home,away,datetime}] }, ... }
+  knockoutResults: {},   // { matchId: { h90, a90, h120, a120, penWinner } }
   view: 'home',
   groupFilter: 'all'
 };
@@ -1766,6 +1786,20 @@ function initFirebaseListeners() {
       toast('Resultados actualizados en tiempo real', 'info');
     }
   });
+
+  db.ref('knockout').on('value', snap => {
+    const data = snap.val();
+    state.knockout = data || {};
+    saveState();
+    if (['bracket', 'admin', 'dashboard'].includes(state.view)) render();
+  });
+
+  db.ref('knockoutResults').on('value', snap => {
+    const data = snap.val();
+    state.knockoutResults = data || {};
+    saveState();
+    if (['bracket', 'leaderboard', 'admin', 'dashboard'].includes(state.view)) render();
+  });
 }
 
 function syncUser(user) {
@@ -1782,6 +1816,14 @@ function syncResults() {
 
 function syncApprovedEmails() {
   saveToFirebase('approvedEmails', state.approvedEmails);
+}
+
+function syncKnockout() {
+  saveToFirebase('knockout', state.knockout);
+}
+
+function syncKnockoutResults() {
+  saveToFirebase('knockoutResults', state.knockoutResults);
 }
 
 const ENTRY_FEE = 30000;
@@ -2404,12 +2446,13 @@ function filterGroup(g) {
 
 function ensurePredictions() {
   if (!state.predictions[state.currentUser.id]) {
-    state.predictions[state.currentUser.id] = { matches: {}, champion: null, bracket: {}, championLocked: false, bracketLocked: {} };
+    state.predictions[state.currentUser.id] = { matches: {}, champion: null, bracket: {}, championLocked: false, bracketLocked: {}, knockout: {} };
   }
   const p = state.predictions[state.currentUser.id];
   if (!p.matches) p.matches = {};
   if (!p.bracket) p.bracket = {};
   if (!p.bracketLocked) p.bracketLocked = {};
+  if (!p.knockout) p.knockout = {};
   return p;
 }
 
@@ -2582,145 +2625,251 @@ function generateKnockoutMatches(qualified) {
   return matches;
 }
 
+// ===== KNOCKOUT (ELIMINATORIAS) =====
+function deriveWinner(obj, match) {
+  // obj tiene h90,a90 y opcionalmente h120,a120,penWinner
+  if (obj.h90 == null || obj.a90 == null) return null;
+  if (obj.h90 > obj.a90) return match.home.code;
+  if (obj.h90 < obj.a90) return match.away.code;
+  // empate en 90
+  if (obj.h120 != null && obj.a120 != null) {
+    if (obj.h120 > obj.a120) return match.home.code;
+    if (obj.h120 < obj.a120) return match.away.code;
+    // empate en 120 -> penales
+    return obj.penWinner || null;
+  }
+  return null;
+}
+
+function calcKnockoutPoints(pred, result, roundId, match) {
+  if (!pred || !result || !match) return 0;
+  const mult = ROUND_MULTIPLIER[roundId] || 1;
+  let pts = 0;
+
+  const predWinner = deriveWinner(pred, match);
+  const realWinner = deriveWinner(result, match);
+
+  // 1. Acertar quien pasa
+  if (predWinner && realWinner && predWinner === realWinner) pts += KO_POINTS.advance;
+
+  // 2. Marcador exacto 90 min
+  if (pred.h90 === result.h90 && pred.a90 === result.a90) pts += KO_POINTS.score90;
+
+  // 3. Alargue: solo si el partido REAL fue a alargue
+  const realET = result.h120 != null && result.a120 != null;
+  const predET = pred.h120 != null && pred.a120 != null;
+  if (realET && predET && pred.h120 === result.h120 && pred.a120 === result.a120) {
+    pts += KO_POINTS.score120;
+  }
+
+  // 4. Penales: solo si el partido REAL fue a penales
+  if (result.penWinner && pred.penWinner && pred.penWinner === result.penWinner) {
+    pts += KO_POINTS.penalty;
+  }
+
+  return Math.round(pts * mult);
+}
+
+function isKoMatchLocked(match) {
+  if (!match.datetime) return false;
+  const kickoff = new Date(match.datetime).getTime();
+  return Date.now() >= (kickoff - LOCK_HOURS * 3600000);
+}
+
 function renderBracket() {
   const preds = ensurePredictions();
-  const bracket = preds.bracket || {};
-  const bracketLocked = preds.bracketLocked || {};
+  const koPreds = preds.knockout || {};
   const { allComplete, qualified } = getKnockoutTeams();
 
-  const rounds = [
-    { id: 'round32', name: 'Octavos de Final (32)', count: 16, multi: ROUND_MULTIPLIER.round32 },
-    { id: 'round16', name: 'Octavos de Final (16)', count: 8, multi: ROUND_MULTIPLIER.round16 },
-    { id: 'quarters', name: 'Cuartos de Final', count: 4, multi: ROUND_MULTIPLIER.quarters },
-    { id: 'semis', name: 'Semifinales', count: 2, multi: ROUND_MULTIPLIER.semis },
-    { id: 'final', name: 'Final', count: 1, multi: ROUND_MULTIPLIER.final }
-  ];
+  // Rondas que el admin ya abrio (tienen partidos)
+  const openRounds = KNOCKOUT_ROUNDS.filter(r => state.knockout[r.id] && state.knockout[r.id].open && (state.knockout[r.id].matches || []).length > 0);
 
-  return `
-    <div class="section-header">
-      <h2>Fase <span>Eliminatoria</span></h2>
-    </div>
+  let html = '<div class="section-header"><h2>Fase <span>Eliminatoria</span></h2></div>';
 
-    ${!allComplete ? `
-      <div style="padding:2rem;background:var(--bg-card);border:1px solid var(--glass-border);border-radius:var(--radius);text-align:center;margin-bottom:2rem">
-        <p style="font-size:2.5rem;margin-bottom:0.5rem">&#9200;</p>
-        <h3 style="margin-bottom:0.5rem">Fase de grupos en curso</h3>
-        <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:1rem">
-          Los cruces eliminatorios se generan automaticamente cuando todos los partidos de grupo terminen.
-        </p>
-        <div style="display:flex;justify-content:center;gap:1rem;flex-wrap:wrap">
-          ${Object.keys(GROUPS).map(g => {
-            const { allPlayed } = calcGroupStandings(g);
-            return `<span style="padding:4px 12px;border-radius:12px;font-size:0.78rem;font-weight:600;${allPlayed ? 'background:rgba(34,197,94,0.15);color:var(--success)' : 'background:rgba(255,255,255,0.06);color:var(--text-muted)'}">
-              Grupo ${g} ${allPlayed ? '&#10003;' : '...'}
-            </span>`;
-          }).join('')}
-        </div>
-        <p style="color:var(--text-muted);font-size:0.8rem;margin-top:1.5rem">
-          Mientras tanto, puedes predecir quien avanzara en cada ronda.
-          <strong style="color:var(--danger)">Una vez guardes, no se puede cambiar.</strong>
-        </p>
-      </div>
-    ` : `
-      <div style="padding:1rem;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:var(--radius);margin-bottom:2rem;font-size:0.85rem;color:var(--success)">
-        &#10003; Fase de grupos completada — ${qualified.length} equipos clasificados
-      </div>
-    `}
-
-    ${rounds.map(round => {
-      const picks = bracket[round.id] || [];
-      const locked = !!bracketLocked[round.id];
-      const teamPool = round.id === 'round32' ? ALL_TEAMS : ALL_TEAMS.filter(t => (bracket[rounds[rounds.indexOf(round) - 1]?.id] || []).includes(t.code));
-      const availableTeams = round.id === 'round32' ? ALL_TEAMS : (teamPool.length > 0 ? teamPool : ALL_TEAMS);
-
-      return `
-        <div style="margin-bottom:2rem;padding:1.5rem;background:var(--bg-card);border:1px solid ${locked ? 'rgba(34,197,94,0.2)' : 'var(--glass-border)'};border-radius:var(--radius)">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;flex-wrap:wrap;gap:8px">
-            <h3 style="font-size:1rem;color:var(--accent);margin:0">
-              ${round.name}
-              <span style="font-size:0.78rem;color:var(--text-muted);margin-left:6px">x${round.multi} pts</span>
-            </h3>
-            <div style="display:flex;align-items:center;gap:8px">
-              <span style="font-size:0.8rem;color:var(--text-muted)">${picks.length}/${round.count}</span>
-              ${locked
-                ? '<span class="pending-badge approved" style="font-size:0.7rem;padding:3px 8px">&#128274; Bloqueado</span>'
-                : picks.length === round.count
-                  ? `<button class="btn btn-gold btn-sm" onclick="lockBracketRound('${round.id}')">&#128274; Bloquear (definitivo)</button>`
-                  : ''
-              }
-            </div>
-          </div>
-          <div class="champion-select-grid">
-            ${availableTeams.map(t => {
-              const selected = picks.includes(t.code);
-              return `
-                <div class="champion-option ${selected ? 'selected' : ''} ${locked ? 'locked' : ''}"
-                     style="${locked ? 'pointer-events:none;opacity:' + (selected ? '1' : '0.3') : ''}"
-                     onclick="toggleBracketPick('${round.id}', '${t.code}', ${round.count})">
-                  <span class="flag">${t.flag}</span>
-                  <span>${t.name}</span>
-                </div>`;
-            }).join('')}
-          </div>
-        </div>`;
-    }).join('')}`;
-}
-
-function toggleBracketPick(roundId, teamCode, maxPicks) {
-  const preds = ensurePredictions();
-  if (preds.bracketLocked[roundId]) return toast('Esta ronda ya esta bloqueada. No se puede cambiar.', 'error');
-  if (isKnockoutDeadlinePassed()) return toast('El plazo para predicciones eliminatorias ya cerro.', 'error');
-
-  if (!preds.bracket[roundId]) preds.bracket[roundId] = [];
-  const picks = preds.bracket[roundId];
-
-  const idx = picks.indexOf(teamCode);
-  if (idx >= 0) {
-    picks.splice(idx, 1);
+  // Banner de estado de grupos
+  if (!allComplete) {
+    html += '<div style="padding:1.5rem;background:var(--bg-card);border:1px solid var(--glass-border);border-radius:var(--radius);text-align:center;margin-bottom:1.5rem">';
+    html += '<p style="font-size:2rem;margin-bottom:0.5rem">&#9917;</p>';
+    html += '<h3 style="margin-bottom:0.5rem">Fase de grupos en curso</h3>';
+    html += '<p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:1rem">Los cruces eliminatorios apareceran aqui cuando el admin abra cada ronda (se importan automaticamente de la API o se arman manual).</p>';
+    html += '<div style="display:flex;justify-content:center;gap:6px;flex-wrap:wrap">';
+    Object.keys(GROUPS).forEach(g => {
+      const { allPlayed } = calcGroupStandings(g);
+      html += '<span style="padding:3px 10px;border-radius:12px;font-size:0.72rem;font-weight:600;' + (allPlayed ? 'background:rgba(34,197,94,0.15);color:var(--success)' : 'background:rgba(255,255,255,0.06);color:var(--text-muted)') + '">Grupo ' + g + (allPlayed ? ' &#10003;' : ' ...') + '</span>';
+    });
+    html += '</div></div>';
   } else {
-    if (picks.length >= maxPicks) return toast(`Maximo ${maxPicks} equipos en esta ronda`, 'error');
-    picks.push(teamCode);
+    html += '<div style="padding:1rem;background:rgba(34,197,94,0.08);border:1px solid rgba(34,197,94,0.2);border-radius:var(--radius);margin-bottom:1.5rem;font-size:0.85rem;color:var(--success)">&#10003; Fase de grupos completada — ' + qualified.length + ' equipos clasificados</div>';
   }
-  saveState();
-  syncPrediction(state.currentUser.id);
-  render();
+
+  if (openRounds.length === 0) {
+    html += '<div style="padding:2rem;text-align:center;color:var(--text-muted)"><p style="font-size:2.5rem">&#9203;</p><p>Aun no hay rondas eliminatorias abiertas.</p><p style="font-size:0.82rem">El admin abrira los dieciseisavos cuando se definan los cruces.</p></div>';
+    return html;
+  }
+
+  // Render de cada ronda abierta
+  openRounds.forEach(round => {
+    const matches = state.knockout[round.id].matches || [];
+    html += '<div style="margin-bottom:1.5rem">';
+    html += '<h3 style="font-size:1.05rem;color:var(--accent);margin-bottom:0.8rem">' + round.name + ' <span style="font-size:0.75rem;color:var(--text-muted)">x' + ROUND_MULTIPLIER[round.id] + ' pts</span></h3>';
+    html += '<div class="matches-container">';
+    matches.forEach(m => {
+      html += renderKoMatchCard(m, round.id, koPreds[m.id]);
+    });
+    html += '</div></div>';
+  });
+
+  return html;
 }
 
-function lockBracketRound(roundId) {
-  const preds = ensurePredictions();
-  const picks = preds.bracket[roundId] || [];
+function renderKoMatchCard(m, roundId, pred) {
+  pred = pred || {};
+  const locked = isKoMatchLocked(m) || pred.locked;
+  const result = state.knockoutResults[m.id];
+  const tie90 = pred.h90 != null && pred.h90 === pred.a90;
+  const tie120 = pred.h120 != null && pred.h120 === pred.a120;
+  const dis = locked ? 'disabled' : '';
 
-  const roundNames = { round32: 'Octavos (32)', round16: 'Octavos (16)', quarters: 'Cuartos', semis: 'Semifinales', final: 'Final' };
+  let h = '<div class="match-card ' + (pred.locked ? 'saved' : '') + ' ' + (locked ? 'locked' : '') + '" id="ko-card-' + m.id + '">';
 
-  const modal = document.createElement('div');
-  modal.id = 'lockModal';
-  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px)';
-  modal.innerHTML = `
-    <div style="background:var(--secondary);border:1px solid rgba(239,68,68,0.3);border-radius:var(--radius);padding:2rem;max-width:420px;width:90%;text-align:center">
-      <h3 style="margin-bottom:0.5rem">&#128274; Bloquear ${roundNames[roundId] || roundId}</h3>
-      <div style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);border-radius:var(--radius-sm);padding:12px;margin:1rem 0">
-        <p style="font-size:0.85rem;color:var(--danger);font-weight:600">&#9888; Esto es DEFINITIVO</p>
-        <p style="font-size:0.78rem;color:var(--text-muted);margin-top:4px">No podras cambiar tus selecciones para esta ronda.</p>
-      </div>
-      <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem">
-        Seleccionaste ${picks.length} equipo${picks.length > 1 ? 's' : ''}:
-        <strong style="color:var(--text)">${picks.map(c => { const t = ALL_TEAMS.find(x => x.code === c); return t ? t.flag + ' ' + t.name : c; }).join(', ')}</strong>
-      </p>
-      <div style="display:flex;gap:10px;justify-content:center">
-        <button class="btn btn-outline" onclick="document.getElementById('lockModal').remove()">Cancelar</button>
-        <button class="btn btn-primary" onclick="confirmLockBracket('${roundId}')">&#128274; Confirmar Bloqueo</button>
-      </div>
-    </div>`;
-  document.body.appendChild(modal);
+  // Meta
+  h += '<div class="match-meta">';
+  h += '<span class="round-badge">' + (m.label || 'Cruce') + '</span>';
+  if (m.datetime) h += '<span class="match-datetime">' + formatMatchDate(m.datetime) + '</span>';
+  if (result) h += '<span style="color:var(--success);font-size:0.7rem">&#10003; Jugado</span>';
+  else if (locked) h += '<span class="lock-badge locked">&#128274; Cerrado</span>';
+  else if (pred.locked) h += '<span class="lock-badge approved">&#128274; Guardado</span>';
+  h += '</div>';
+
+  // Equipos + marcador 90
+  h += '<div class="match-teams">';
+  h += '<div class="match-team home"><span class="flag">' + m.home.flag + '</span><span class="name">' + m.home.name + '</span></div>';
+  h += '<div class="match-score">';
+  h += '<input type="number" min="0" max="20" id="ko-h90-' + m.id + '" value="' + (pred.h90 != null ? pred.h90 : '') + '" ' + dis + ' onchange="updateKoConditionals(\'' + m.id + '\')" placeholder="-">';
+  h += '<span class="vs">90\'</span>';
+  h += '<input type="number" min="0" max="20" id="ko-a90-' + m.id + '" value="' + (pred.a90 != null ? pred.a90 : '') + '" ' + dis + ' onchange="updateKoConditionals(\'' + m.id + '\')" placeholder="-">';
+  h += '</div>';
+  h += '<div class="match-team away"><span class="flag">' + m.away.flag + '</span><span class="name">' + m.away.name + '</span></div>';
+  h += '</div>';
+
+  // Bloque alargue (120) - visible si empate en 90
+  h += '<div id="ko-et-' + m.id + '" style="' + (tie90 ? '' : 'display:none;') + 'margin-top:10px;padding:10px;background:rgba(212,168,67,0.06);border-radius:var(--radius-sm)">';
+  h += '<div style="font-size:0.72rem;color:var(--accent);text-align:center;margin-bottom:6px">&#9203; Tiempo extra (120\')</div>';
+  h += '<div class="match-score" style="justify-content:center;gap:10px">';
+  h += '<span style="font-size:0.8rem">' + m.home.flag + '</span>';
+  h += '<input type="number" min="0" max="20" id="ko-h120-' + m.id + '" value="' + (pred.h120 != null ? pred.h120 : '') + '" ' + dis + ' onchange="updateKoConditionals(\'' + m.id + '\')" placeholder="-">';
+  h += '<span class="vs">-</span>';
+  h += '<input type="number" min="0" max="20" id="ko-a120-' + m.id + '" value="' + (pred.a120 != null ? pred.a120 : '') + '" ' + dis + ' onchange="updateKoConditionals(\'' + m.id + '\')" placeholder="-">';
+  h += '<span style="font-size:0.8rem">' + m.away.flag + '</span>';
+  h += '</div></div>';
+
+  // Bloque penales - visible si empate en 120
+  h += '<div id="ko-pk-' + m.id + '" style="' + (tie90 && tie120 ? '' : 'display:none;') + 'margin-top:10px;padding:10px;background:rgba(239,68,68,0.06);border-radius:var(--radius-sm)">';
+  h += '<div style="font-size:0.72rem;color:var(--danger);text-align:center;margin-bottom:6px">&#129354; Penales — quien gana?</div>';
+  h += '<div style="display:flex;gap:8px;justify-content:center">';
+  h += '<button type="button" class="btn btn-sm ' + (pred.penWinner === m.home.code ? 'btn-gold' : 'btn-outline') + '" ' + (locked ? 'disabled' : '') + ' onclick="setPenWinner(\'' + m.id + '\',\'' + m.home.code + '\')">' + m.home.flag + ' ' + m.home.name + '</button>';
+  h += '<button type="button" class="btn btn-sm ' + (pred.penWinner === m.away.code ? 'btn-gold' : 'btn-outline') + '" ' + (locked ? 'disabled' : '') + ' onclick="setPenWinner(\'' + m.id + '\',\'' + m.away.code + '\')">' + m.away.flag + ' ' + m.away.name + '</button>';
+  h += '</div></div>';
+
+  // Resultado oficial + puntos
+  if (result) {
+    let resTxt = result.h90 + '-' + result.a90 + ' (90\')';
+    if (result.h120 != null) resTxt += ', ' + result.h120 + '-' + result.a120 + ' (120\')';
+    if (result.penWinner) { const w = ALL_TEAMS.find(t => t.code === result.penWinner); resTxt += ', penales: ' + (w ? w.flag : result.penWinner); }
+    h += '<div style="text-align:center;margin-top:8px;font-size:0.78rem;color:var(--text-muted)">Oficial: <strong style="color:var(--text)">' + resTxt + '</strong>';
+    if (pred.h90 != null) h += '<span style="margin-left:8px;color:var(--accent)">+' + calcKnockoutPoints(pred, result, roundId, m) + ' pts</span>';
+    h += '</div>';
+  }
+
+  // Acciones
+  h += '<div class="match-actions">';
+  if (result) {
+    h += '';
+  } else if (locked) {
+    h += '<span style="font-size:0.78rem;color:var(--danger)">&#128274; Predicciones cerradas</span>';
+  } else {
+    h += '<button class="btn btn-gold btn-sm" onclick="saveKnockoutPrediction(\'' + m.id + '\',\'' + roundId + '\')">Guardar</button>';
+  }
+  h += '</div>';
+
+  h += '</div>';
+  return h;
 }
 
-function confirmLockBracket(roundId) {
+function updateKoConditionals(matchId) {
+  const h90 = document.getElementById('ko-h90-' + matchId);
+  const a90 = document.getElementById('ko-a90-' + matchId);
+  const etBlock = document.getElementById('ko-et-' + matchId);
+  const pkBlock = document.getElementById('ko-pk-' + matchId);
+  if (!h90 || !a90) return;
+
+  const tie90 = h90.value !== '' && a90.value !== '' && parseInt(h90.value) === parseInt(a90.value);
+  if (etBlock) etBlock.style.display = tie90 ? '' : 'none';
+
+  const h120 = document.getElementById('ko-h120-' + matchId);
+  const a120 = document.getElementById('ko-a120-' + matchId);
+  const tie120 = tie90 && h120 && a120 && h120.value !== '' && a120.value !== '' && parseInt(h120.value) === parseInt(a120.value);
+  if (pkBlock) pkBlock.style.display = tie120 ? '' : 'none';
+}
+
+// Almacen temporal del ganador de penales antes de guardar
+const tempPenWinner = {};
+function setPenWinner(matchId, code) {
+  tempPenWinner[matchId] = code;
+  const m = findKoMatch(matchId);
+  if (!m) return;
+  // refrescar botones
+  const pkBlock = document.getElementById('ko-pk-' + matchId);
+  if (pkBlock) {
+    const btns = pkBlock.querySelectorAll('button');
+    btns[0].className = 'btn btn-sm ' + (code === m.home.code ? 'btn-gold' : 'btn-outline');
+    btns[1].className = 'btn btn-sm ' + (code === m.away.code ? 'btn-gold' : 'btn-outline');
+  }
+}
+
+function findKoMatch(matchId) {
+  for (const r of KNOCKOUT_ROUNDS) {
+    const rd = state.knockout[r.id];
+    if (rd && rd.matches) {
+      const m = rd.matches.find(x => x.id === matchId);
+      if (m) return m;
+    }
+  }
+  return null;
+}
+
+function saveKnockoutPrediction(matchId, roundId) {
+  const m = findKoMatch(matchId);
+  if (!m) return;
+  if (isKoMatchLocked(m)) return toast('Este partido ya esta cerrado (6h antes del inicio).', 'error');
+
+  const h90 = document.getElementById('ko-h90-' + matchId).value;
+  const a90 = document.getElementById('ko-a90-' + matchId).value;
+  if (h90 === '' || a90 === '') return toast('Ingresa el marcador de los 90 minutos', 'error');
+
+  const pred = { h90: parseInt(h90), a90: parseInt(a90), h120: null, a120: null, penWinner: null };
+
+  if (pred.h90 === pred.a90) {
+    // empate en 90 -> requiere 120
+    const h120 = document.getElementById('ko-h120-' + matchId).value;
+    const a120 = document.getElementById('ko-a120-' + matchId).value;
+    if (h120 === '' || a120 === '') return toast('Empate en 90: ingresa el marcador del alargue (120\')', 'error');
+    pred.h120 = parseInt(h120);
+    pred.a120 = parseInt(a120);
+    if (pred.h120 === pred.a120) {
+      // empate en 120 -> requiere ganador penales
+      const pen = tempPenWinner[matchId];
+      if (!pen) return toast('Empate en 120: elige quien gana en penales', 'error');
+      pred.penWinner = pen;
+    }
+  }
+
   const preds = ensurePredictions();
-  preds.bracketLocked[roundId] = true;
+  pred.locked = true; // las predicciones KO se guardan como definitivas
+  preds.knockout[matchId] = pred;
   saveState();
   syncPrediction(state.currentUser.id);
-  document.getElementById('lockModal')?.remove();
-  toast('Ronda bloqueada! Decision final.', 'success');
+  toast('Prediccion guardada!', 'success');
   render();
 }
 
@@ -2747,11 +2896,39 @@ function calcUserPoints(userId) {
   if (!preds) return 0;
   let total = 0;
 
+  // Puntos de fase de grupos
   for (const [matchId, result] of Object.entries(state.results)) {
-    const pred = preds.matches[matchId];
+    const pred = (preds.matches || {})[matchId];
     const match = GROUP_MATCHES.find(m => m.id === parseInt(matchId));
     if (pred && match) {
       total += calcMatchPoints(pred, result, match.round);
+    }
+  }
+
+  // Puntos de eliminatorias
+  const koPreds = preds.knockout || {};
+  for (const [matchId, result] of Object.entries(state.knockoutResults || {})) {
+    const pred = koPreds[matchId];
+    if (!pred) continue;
+    // encontrar el match y su ronda
+    for (const r of KNOCKOUT_ROUNDS) {
+      const rd = state.knockout[r.id];
+      if (rd && rd.matches) {
+        const m = rd.matches.find(x => x.id === matchId);
+        if (m) { total += calcKnockoutPoints(pred, result, r.id, m); break; }
+      }
+    }
+  }
+
+  // Bonus campeon acertado
+  if (preds.champion && state.knockoutResults) {
+    const finalRound = state.knockout.final;
+    if (finalRound && finalRound.matches && finalRound.matches[0]) {
+      const finalResult = state.knockoutResults[finalRound.matches[0].id];
+      if (finalResult) {
+        const champ = deriveWinner(finalResult, finalRound.matches[0]);
+        if (champ && champ === preds.champion) total += POINTS.champion;
+      }
     }
   }
 
@@ -2855,17 +3032,25 @@ function renderRules() {
         <h3><span class="icon" style="background:rgba(139,21,56,0.15)">&#127775;</span> Bonificaciones</h3>
         <table class="points-table">
           <tr><td>Acertar campeon del mundo</td><td>+${POINTS.champion} pts</td></tr>
-          <tr><td>Acertar finalista</td><td>+${POINTS.finalist} pts</td></tr>
-          <tr><td>Acertar semifinalista</td><td>+${POINTS.semifinalist} pts</td></tr>
+        </table>
+      </div>
+      <div class="rule-card">
+        <h3><span class="icon" style="background:rgba(168,85,247,0.15)">&#129354;</span> Eliminatorias (90/120/Penales)</h3>
+        <p style="font-size:0.78rem;color:var(--text-muted);margin-bottom:8px">Predices el marcador a los 90'. Si empatas, predices el alargue (120'). Si empatas otra vez, eliges quien gana en penales. Puntos acumulables x multiplicador:</p>
+        <table class="points-table">
+          <tr><td>Acertar quien pasa</td><td>+${KO_POINTS.advance} pts</td></tr>
+          <tr><td>Marcador exacto 90'</td><td>+${KO_POINTS.score90} pts</td></tr>
+          <tr><td>Marcador exacto alargue 120'</td><td>+${KO_POINTS.score120} pts</td></tr>
+          <tr><td>Acertar ganador en penales</td><td>+${KO_POINTS.penalty} pts</td></tr>
         </table>
       </div>
       <div class="rule-card">
         <h3><span class="icon" style="background:rgba(239,68,68,0.15)">&#128274;</span> Bloqueos y Plazos</h3>
         <ul>
-          <li>Predicciones de grupo se bloquean <strong>6 horas antes</strong> de cada partido</li>
+          <li>Todas las predicciones se bloquean <strong>6 horas antes</strong> de cada partido</li>
           <li>El campeon se elige <strong>UNA SOLA VEZ</strong> — no se puede cambiar. Plazo: antes del primer partido</li>
-          <li>Predicciones eliminatorias se bloquean por ronda cuando el usuario confirma</li>
-          <li>Una vez bloqueada una prediccion, es <strong>definitiva</strong></li>
+          <li>Las eliminatorias se abren <strong>ronda por ronda</strong> cuando se definen los cruces</li>
+          <li>Los cruces se importan automaticamente de la API (o el admin los arma)</li>
         </ul>
       </div>
       <div class="rule-card">
@@ -3057,6 +3242,8 @@ function renderAdmin() {
       }).join('')}
     </div>
 
+    ${renderAdminKnockout()}
+
     <div style="margin-top:3rem;padding:2rem;background:var(--bg-card);border-radius:var(--radius);border:1px solid var(--glass-border)">
       <h3 style="margin-bottom:1rem">&#9888;&#65039; Zona de Peligro</h3>
       <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem">
@@ -3066,6 +3253,213 @@ function renderAdmin() {
         Reiniciar Todo
       </button>
     </div>`;
+}
+
+// ===== ADMIN: GESTION DE ELIMINATORIAS =====
+function renderAdminKnockout() {
+  const { allComplete, qualified } = getKnockoutTeams();
+
+  let h = '<div style="margin-top:2rem;margin-bottom:2rem;padding:1.5rem;background:linear-gradient(135deg,rgba(139,21,56,0.1),rgba(212,168,67,0.08));border:1px solid rgba(212,168,67,0.2);border-radius:var(--radius)">';
+  h += '<h3 style="margin-bottom:0.5rem;font-size:1.1rem">&#127942; Gestion de Eliminatorias</h3>';
+  h += '<p style="font-size:0.8rem;color:var(--text-muted);margin-bottom:1rem">Abre cada ronda para que los participantes predigan. Importa los cruces de la API o armalos manual.</p>';
+
+  if (!allComplete) {
+    h += '<p style="font-size:0.82rem;color:#f59e0b;margin-bottom:1rem">&#9888; La fase de grupos no ha terminado. Puedes abrir rondas igual, pero los cruces de la API solo apareceran cuando FIFA los defina.</p>';
+  }
+
+  KNOCKOUT_ROUNDS.forEach(round => {
+    const rd = state.knockout[round.id] || { open: false, matches: [] };
+    const matches = rd.matches || [];
+    const isOpen = rd.open && matches.length > 0;
+
+    h += '<div style="margin-bottom:1rem;padding:1rem;background:var(--bg-card);border-radius:var(--radius-sm);border:1px solid ' + (isOpen ? 'rgba(34,197,94,0.2)' : 'var(--glass-border)') + '">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">';
+    h += '<strong style="font-size:0.92rem">' + round.name + ' <span style="font-size:0.72rem;color:var(--text-muted)">(' + matches.length + '/' + round.count + ' cruces)</span></strong>';
+    h += '<div style="display:flex;gap:6px;flex-wrap:wrap">';
+    if (state.apiKey) {
+      h += '<button class="btn btn-sm btn-outline" onclick="importKnockoutFromApi(\'' + round.id + '\')">&#11015; Importar de API</button>';
+    }
+    h += '<button class="btn btn-sm btn-outline" onclick="addKoMatchManual(\'' + round.id + '\')">+ Cruce manual</button>';
+    if (matches.length > 0) {
+      h += '<button class="btn btn-sm ' + (isOpen ? 'btn-gold' : 'btn-outline') + '" onclick="toggleKoRoundOpen(\'' + round.id + '\')">' + (isOpen ? '&#10003; Abierta' : 'Abrir ronda') + '</button>';
+    }
+    h += '</div></div>';
+
+    // Listar cruces con inputs de resultado
+    if (matches.length > 0) {
+      h += '<div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">';
+      matches.forEach(m => {
+        const res = state.knockoutResults[m.id] || {};
+        h += '<div style="padding:8px;background:rgba(255,255,255,0.03);border-radius:8px;font-size:0.8rem">';
+        h += '<div style="display:flex;align-items:center;gap:6px;justify-content:space-between;flex-wrap:wrap">';
+        h += '<span>' + m.home.flag + ' ' + m.home.name + ' vs ' + m.away.flag + ' ' + m.away.name + '</span>';
+        h += '<button class="btn btn-sm" style="background:rgba(239,68,68,0.6);color:#fff;padding:2px 6px;font-size:0.65rem" onclick="removeKoMatch(\'' + round.id + '\',\'' + m.id + '\')">&#128465;</button>';
+        h += '</div>';
+        // inputs de resultado oficial: 90, 120, penales
+        h += '<div style="display:flex;gap:6px;align-items:center;margin-top:6px;flex-wrap:wrap">';
+        h += '<span style="font-size:0.7rem;color:var(--text-muted)">90\':</span>';
+        h += '<input type="number" min="0" id="kor-h90-' + m.id + '" value="' + (res.h90 != null ? res.h90 : '') + '" style="width:40px;padding:4px;text-align:center;border-radius:6px;border:1px solid var(--glass-border);background:rgba(255,255,255,0.04);color:var(--text)">';
+        h += '<span>-</span>';
+        h += '<input type="number" min="0" id="kor-a90-' + m.id + '" value="' + (res.a90 != null ? res.a90 : '') + '" style="width:40px;padding:4px;text-align:center;border-radius:6px;border:1px solid var(--glass-border);background:rgba(255,255,255,0.04);color:var(--text)">';
+        h += '<span style="font-size:0.7rem;color:var(--text-muted);margin-left:8px">120\':</span>';
+        h += '<input type="number" min="0" id="kor-h120-' + m.id + '" value="' + (res.h120 != null ? res.h120 : '') + '" placeholder="-" style="width:40px;padding:4px;text-align:center;border-radius:6px;border:1px solid var(--glass-border);background:rgba(255,255,255,0.04);color:var(--text)">';
+        h += '<span>-</span>';
+        h += '<input type="number" min="0" id="kor-a120-' + m.id + '" value="' + (res.a120 != null ? res.a120 : '') + '" placeholder="-" style="width:40px;padding:4px;text-align:center;border-radius:6px;border:1px solid var(--glass-border);background:rgba(255,255,255,0.04);color:var(--text)">';
+        h += '<select id="kor-pen-' + m.id + '" style="padding:4px;font-size:0.7rem;border-radius:6px;border:1px solid var(--glass-border);background:rgba(255,255,255,0.04);color:var(--text)">';
+        h += '<option value="">Penales: nadie</option>';
+        h += '<option value="' + m.home.code + '"' + (res.penWinner === m.home.code ? ' selected' : '') + '>' + m.home.name + '</option>';
+        h += '<option value="' + m.away.code + '"' + (res.penWinner === m.away.code ? ' selected' : '') + '>' + m.away.name + '</option>';
+        h += '</select>';
+        h += '<button class="btn btn-gold btn-sm" style="padding:4px 10px;font-size:0.7rem" onclick="saveKoResult(\'' + m.id + '\')">Guardar</button>';
+        h += '</div></div>';
+      });
+      h += '</div>';
+    }
+
+    h += '</div>';
+  });
+
+  h += '</div>';
+  return h;
+}
+
+async function importKnockoutFromApi(roundId) {
+  if (!state.apiKey) return toast('Configura la API key primero', 'error');
+  const round = KNOCKOUT_ROUNDS.find(r => r.id === roundId);
+  if (!round) return;
+
+  toast('Importando cruces de ' + round.name + '...', 'info');
+  try {
+    const resp = await fetch('https://api.football-data.org/v4/competitions/WC/matches?stage=' + round.apiStage, {
+      headers: { 'X-Auth-Token': state.apiKey }
+    });
+    if (!resp.ok) {
+      if (resp.status === 403) return toast('API sin permiso para esta competicion', 'error');
+      if (resp.status === 429) return toast('Limite de API alcanzado, espera 1 min', 'error');
+      return toast('Error API: ' + resp.status, 'error');
+    }
+    const data = await resp.json();
+    if (!data.matches || data.matches.length === 0) {
+      return toast('La API aun no tiene cruces para ' + round.name, 'info');
+    }
+
+    const matches = [];
+    data.matches.forEach((apiM, idx) => {
+      const home = findTeamByApiName(apiM.homeTeam && (apiM.homeTeam.name || apiM.homeTeam.shortName));
+      const away = findTeamByApiName(apiM.awayTeam && (apiM.awayTeam.name || apiM.awayTeam.shortName));
+      if (!home || !away) return; // equipos aun no definidos
+      matches.push({
+        id: roundId + '_' + (idx + 1),
+        round: roundId,
+        label: round.name,
+        home, away,
+        datetime: apiM.utcDate || null
+      });
+    });
+
+    if (matches.length === 0) {
+      return toast('Los equipos de ' + round.name + ' aun no estan definidos en la API', 'info');
+    }
+
+    state.knockout[roundId] = { open: state.knockout[roundId] ? state.knockout[roundId].open : false, matches };
+    saveState();
+    syncKnockout();
+    toast(matches.length + ' cruces importados! Recuerda "Abrir ronda".', 'success');
+    render();
+  } catch(e) {
+    console.error(e);
+    toast('Error al importar: ' + e.message, 'error');
+  }
+}
+
+function addKoMatchManual(roundId) {
+  const round = KNOCKOUT_ROUNDS.find(r => r.id === roundId);
+  if (!round) return;
+
+  const modal = document.createElement('div');
+  modal.id = 'koAddModal';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);padding:1rem';
+  let opts = '<option value="">Seleccionar equipo...</option>' + ALL_TEAMS.map(t => '<option value="' + t.code + '">' + t.flag + ' ' + t.name + '</option>').join('');
+  modal.innerHTML =
+    '<div style="background:var(--secondary);border:1px solid var(--glass-border);border-radius:var(--radius);padding:1.5rem;max-width:400px;width:100%">' +
+    '<h3 style="margin-bottom:1rem">+ Cruce manual — ' + round.name + '</h3>' +
+    '<div class="form-group"><label>Equipo local</label><select id="koAddHome">' + opts + '</select></div>' +
+    '<div class="form-group"><label>Equipo visitante</label><select id="koAddAway">' + opts + '</select></div>' +
+    '<div class="form-group"><label>Fecha y hora (opcional)</label><input type="datetime-local" id="koAddDate"></div>' +
+    '<div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn btn-outline btn-sm" onclick="document.getElementById(\'koAddModal\').remove()">Cancelar</button>' +
+    '<button class="btn btn-gold btn-sm" onclick="confirmAddKoMatch(\'' + roundId + '\')">Agregar</button></div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+function confirmAddKoMatch(roundId) {
+  const homeCode = document.getElementById('koAddHome').value;
+  const awayCode = document.getElementById('koAddAway').value;
+  const dateVal = document.getElementById('koAddDate').value;
+  if (!homeCode || !awayCode) return toast('Selecciona ambos equipos', 'error');
+  if (homeCode === awayCode) return toast('Deben ser equipos distintos', 'error');
+
+  const home = ALL_TEAMS.find(t => t.code === homeCode);
+  const away = ALL_TEAMS.find(t => t.code === awayCode);
+  const round = KNOCKOUT_ROUNDS.find(r => r.id === roundId);
+
+  if (!state.knockout[roundId]) state.knockout[roundId] = { open: false, matches: [] };
+  const matches = state.knockout[roundId].matches || [];
+  matches.push({
+    id: roundId + '_m' + Date.now(),
+    round: roundId,
+    label: round.name,
+    home, away,
+    datetime: dateVal ? new Date(dateVal).toISOString() : null
+  });
+  state.knockout[roundId].matches = matches;
+  saveState();
+  syncKnockout();
+  document.getElementById('koAddModal')?.remove();
+  toast('Cruce agregado', 'success');
+  render();
+}
+
+function removeKoMatch(roundId, matchId) {
+  if (!confirm('Eliminar este cruce?')) return;
+  const rd = state.knockout[roundId];
+  if (!rd) return;
+  rd.matches = (rd.matches || []).filter(m => m.id !== matchId);
+  saveState();
+  syncKnockout();
+  toast('Cruce eliminado', 'info');
+  render();
+}
+
+function toggleKoRoundOpen(roundId) {
+  if (!state.knockout[roundId]) return;
+  state.knockout[roundId].open = !state.knockout[roundId].open;
+  saveState();
+  syncKnockout();
+  toast(state.knockout[roundId].open ? 'Ronda abierta para predicciones!' : 'Ronda cerrada', state.knockout[roundId].open ? 'success' : 'info');
+  render();
+}
+
+function saveKoResult(matchId) {
+  const h90 = document.getElementById('kor-h90-' + matchId).value;
+  const a90 = document.getElementById('kor-a90-' + matchId).value;
+  if (h90 === '' || a90 === '') return toast('Ingresa el marcador de 90 min', 'error');
+
+  const res = { h90: parseInt(h90), a90: parseInt(a90), h120: null, a120: null, penWinner: null };
+  const h120 = document.getElementById('kor-h120-' + matchId).value;
+  const a120 = document.getElementById('kor-a120-' + matchId).value;
+  if (h120 !== '' && a120 !== '') {
+    res.h120 = parseInt(h120);
+    res.a120 = parseInt(a120);
+  }
+  const pen = document.getElementById('kor-pen-' + matchId).value;
+  if (pen) res.penWinner = pen;
+
+  state.knockoutResults[matchId] = res;
+  saveState();
+  syncKnockoutResults();
+  toast('Resultado guardado — puntos recalculados', 'success');
+  render();
 }
 
 function saveResult(matchId) {
@@ -3097,7 +3491,7 @@ function resetAll() {
     if (firebaseReady) {
       db.ref().remove().catch(e => console.error(e));
     }
-    state = { currentUser: null, users: [], predictions: {}, results: {}, approvedEmails: {}, view: 'home', groupFilter: 'all' };
+    state = { currentUser: null, users: [], predictions: {}, results: {}, approvedEmails: {}, knockout: {}, knockoutResults: {}, view: 'home', groupFilter: 'all' };
     navigate('home');
     toast('Todo reiniciado', 'info');
   }
