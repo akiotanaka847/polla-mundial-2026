@@ -2,7 +2,9 @@
 
 App interactiva para una polla del Mundial FIFA 2026 (Canadá / México / USA) con predicciones, dashboard en vivo y sincronización en tiempo real.
 
-**URL en vivo:** https://akiotanaka847.github.io/polla-mundial-2026/
+**URL en vivo:** https://qspollamundial.netlify.app/
+
+**Espejo (GitHub Pages):** https://akiotanaka847.github.io/polla-mundial-2026/
 
 ## Features
 
