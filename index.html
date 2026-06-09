@@ -2966,13 +2966,34 @@ function calcUserPoints(userId) {
   return total;
 }
 
+// Cuenta marcadores exactos (grupos + eliminatorias 90') para desempate
+function countExactScores(userId) {
+  const preds = state.predictions[userId];
+  if (!preds) return 0;
+  let exact = 0;
+
+  for (const [matchId, result] of Object.entries(state.results)) {
+    const pred = (preds.matches || {})[matchId];
+    if (pred && pred.home === result.home && pred.away === result.away) exact++;
+  }
+
+  const koPreds = preds.knockout || {};
+  for (const [matchId, result] of Object.entries(state.knockoutResults || {})) {
+    const pred = koPreds[matchId];
+    if (pred && pred.h90 === result.h90 && pred.a90 === result.a90) exact++;
+  }
+
+  return exact;
+}
+
 function renderLeaderboard() {
   const rankings = state.users.map(u => ({
     ...u,
     points: calcUserPoints(u.id),
+    exactos: countExactScores(u.id),
     predictions: Object.keys((state.predictions[u.id] || {}).matches || {}).length,
     champion: (state.predictions[u.id] || {}).champion
-  })).sort((a, b) => b.points - a.points);
+  })).sort((a, b) => b.points - a.points || b.exactos - a.exactos);
 
   const maxPts = Math.max(...rankings.map(r => r.points), 1);
 
@@ -3536,8 +3557,9 @@ function renderDashboard() {
   const rankings = state.users.map(u => ({
     ...u,
     points: calcUserPoints(u.id),
+    exactos: countExactScores(u.id),
     predictions: Object.keys((state.predictions[u.id] || {}).matches || {}).length
-  })).sort((a, b) => b.points - a.points);
+  })).sort((a, b) => b.points - a.points || b.exactos - a.exactos);
 
   const totalPrize = state.users.filter(u => u.paid !== false).length * ENTRY_FEE;
   const resultsCount = Object.keys(state.results).length;
