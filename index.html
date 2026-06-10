@@ -1559,9 +1559,8 @@ const KO_POINTS = {
 
 const LOCK_HOURS = 6;
 // El campeon se debe elegir antes del primer partido del mundial
-const CHAMPION_DEADLINE = '2026-06-11T15:00:00Z'; // 6h antes del primer partido (11 jun 21:00 UTC)
-// Las eliminatorias se bloquean automaticamente cuando empieza la fase
-const KNOCKOUT_DEADLINE = '2026-06-28T18:00:00Z'; // Aprox inicio octavos de final
+// Primer partido oficial: Mexico vs Sudafrica, 2026-06-11T19:00:00Z -> 6h antes = 13:00Z
+const CHAMPION_DEADLINE = '2026-06-11T13:00:00Z';
 
 
 // Fechas oficiales del fixture FIFA 2026 (importadas de football-data.org)
@@ -1711,10 +1710,6 @@ function formatMatchDate(datetime) {
 
 function isChampionDeadlinePassed() {
   return Date.now() >= new Date(CHAMPION_DEADLINE).getTime();
-}
-
-function isKnockoutDeadlinePassed() {
-  return Date.now() >= new Date(KNOCKOUT_DEADLINE).getTime();
 }
 
 function getDeadlineCountdown(deadline) {
