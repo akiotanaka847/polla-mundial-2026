@@ -1564,19 +1564,98 @@ const CHAMPION_DEADLINE = '2026-06-11T15:00:00Z'; // 6h antes del primer partido
 const KNOCKOUT_DEADLINE = '2026-06-28T18:00:00Z'; // Aprox inicio octavos de final
 
 
+// Fechas oficiales del fixture FIFA 2026 (importadas de football-data.org)
+const GROUP_FIXTURE_DATES = {
+  "MEX_RSA": "2026-06-11T19:00:00Z",
+  "KOR_CZE": "2026-06-12T02:00:00Z",
+  "CAN_BIH": "2026-06-12T19:00:00Z",
+  "USA_PAR": "2026-06-13T01:00:00Z",
+  "QAT_SUI": "2026-06-13T19:00:00Z",
+  "BRA_MAR": "2026-06-13T22:00:00Z",
+  "HAI_SCO": "2026-06-14T01:00:00Z",
+  "AUS_TUR": "2026-06-14T04:00:00Z",
+  "GER_CUW": "2026-06-14T17:00:00Z",
+  "NED_JPN": "2026-06-14T20:00:00Z",
+  "CIV_ECU": "2026-06-14T23:00:00Z",
+  "SWE_TUN": "2026-06-15T02:00:00Z",
+  "ESP_CPV": "2026-06-15T16:00:00Z",
+  "BEL_EGY": "2026-06-15T19:00:00Z",
+  "KSA_URU": "2026-06-15T22:00:00Z",
+  "IRN_NZL": "2026-06-16T01:00:00Z",
+  "FRA_SEN": "2026-06-16T19:00:00Z",
+  "IRQ_NOR": "2026-06-16T22:00:00Z",
+  "ARG_ALG": "2026-06-17T01:00:00Z",
+  "AUT_JOR": "2026-06-17T04:00:00Z",
+  "POR_COD": "2026-06-17T17:00:00Z",
+  "ENG_CRO": "2026-06-17T20:00:00Z",
+  "GHA_PAN": "2026-06-17T23:00:00Z",
+  "UZB_COL": "2026-06-18T02:00:00Z",
+  "CZE_RSA": "2026-06-18T16:00:00Z",
+  "SUI_BIH": "2026-06-18T19:00:00Z",
+  "CAN_QAT": "2026-06-18T22:00:00Z",
+  "MEX_KOR": "2026-06-19T01:00:00Z",
+  "USA_AUS": "2026-06-19T19:00:00Z",
+  "SCO_MAR": "2026-06-19T22:00:00Z",
+  "BRA_HAI": "2026-06-20T00:30:00Z",
+  "TUR_PAR": "2026-06-20T03:00:00Z",
+  "NED_SWE": "2026-06-20T17:00:00Z",
+  "GER_CIV": "2026-06-20T20:00:00Z",
+  "ECU_CUW": "2026-06-21T00:00:00Z",
+  "TUN_JPN": "2026-06-21T04:00:00Z",
+  "ESP_KSA": "2026-06-21T16:00:00Z",
+  "BEL_IRN": "2026-06-21T19:00:00Z",
+  "URU_CPV": "2026-06-21T22:00:00Z",
+  "NZL_EGY": "2026-06-22T01:00:00Z",
+  "ARG_AUT": "2026-06-22T17:00:00Z",
+  "FRA_IRQ": "2026-06-22T21:00:00Z",
+  "NOR_SEN": "2026-06-23T00:00:00Z",
+  "JOR_ALG": "2026-06-23T03:00:00Z",
+  "POR_UZB": "2026-06-23T17:00:00Z",
+  "ENG_GHA": "2026-06-23T20:00:00Z",
+  "PAN_CRO": "2026-06-23T23:00:00Z",
+  "COL_COD": "2026-06-24T02:00:00Z",
+  "SUI_CAN": "2026-06-24T19:00:00Z",
+  "BIH_QAT": "2026-06-24T19:00:00Z",
+  "MAR_HAI": "2026-06-24T22:00:00Z",
+  "SCO_BRA": "2026-06-24T22:00:00Z",
+  "CZE_MEX": "2026-06-25T01:00:00Z",
+  "RSA_KOR": "2026-06-25T01:00:00Z",
+  "ECU_GER": "2026-06-25T20:00:00Z",
+  "CUW_CIV": "2026-06-25T20:00:00Z",
+  "TUN_NED": "2026-06-25T23:00:00Z",
+  "JPN_SWE": "2026-06-25T23:00:00Z",
+  "TUR_USA": "2026-06-26T02:00:00Z",
+  "PAR_AUS": "2026-06-26T02:00:00Z",
+  "NOR_FRA": "2026-06-26T19:00:00Z",
+  "SEN_IRQ": "2026-06-26T19:00:00Z",
+  "URU_ESP": "2026-06-27T00:00:00Z",
+  "CPV_KSA": "2026-06-27T00:00:00Z",
+  "NZL_BEL": "2026-06-27T03:00:00Z",
+  "EGY_IRN": "2026-06-27T03:00:00Z",
+  "PAN_ENG": "2026-06-27T21:00:00Z",
+  "CRO_GHA": "2026-06-27T21:00:00Z",
+  "COL_POR": "2026-06-27T23:30:00Z",
+  "COD_UZB": "2026-06-27T23:30:00Z",
+  "JOR_ARG": "2026-06-28T02:00:00Z",
+  "ALG_AUT": "2026-06-28T02:00:00Z"
+};
+
+
 function generateGroupMatches() {
   const matches = [];
   let id = 1;
   for (const [group, teams] of Object.entries(GROUPS)) {
     for (let i = 0; i < teams.length; i++) {
       for (let j = i + 1; j < teams.length; j++) {
+        const h = teams[i].code, a = teams[j].code;
+        const dt = GROUP_FIXTURE_DATES[h + '_' + a] || GROUP_FIXTURE_DATES[a + '_' + h] || null;
         matches.push({
           id: id++,
           group,
           round: 'groups',
           home: teams[i],
           away: teams[j],
-          datetime: null  // se llena con el fixture oficial importado de la API
+          datetime: dt  // fecha oficial del fixture FIFA 2026
         });
       }
     }
