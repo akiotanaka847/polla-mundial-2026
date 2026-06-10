@@ -1563,51 +1563,11 @@ const CHAMPION_DEADLINE = '2026-06-11T15:00:00Z'; // 6h antes del primer partido
 // Las eliminatorias se bloquean automaticamente cuando empieza la fase
 const KNOCKOUT_DEADLINE = '2026-06-28T18:00:00Z'; // Aprox inicio octavos de final
 
-const GROUP_SCHEDULE = {
-  A: [
-    ['2026-06-11T21:00:00Z','2026-06-12T18:00:00Z','2026-06-16T21:00:00Z','2026-06-17T00:00:00Z','2026-06-21T20:00:00Z','2026-06-21T20:00:00Z'],
-  ],
-  B: [
-    ['2026-06-12T15:00:00Z','2026-06-12T21:00:00Z','2026-06-17T15:00:00Z','2026-06-17T21:00:00Z','2026-06-22T20:00:00Z','2026-06-22T20:00:00Z'],
-  ],
-  C: [
-    ['2026-06-13T00:00:00Z','2026-06-13T18:00:00Z','2026-06-17T18:00:00Z','2026-06-18T00:00:00Z','2026-06-22T16:00:00Z','2026-06-22T16:00:00Z'],
-  ],
-  D: [
-    ['2026-06-13T03:00:00Z','2026-06-13T21:00:00Z','2026-06-18T03:00:00Z','2026-06-18T21:00:00Z','2026-06-23T00:00:00Z','2026-06-23T00:00:00Z'],
-  ],
-  E: [
-    ['2026-06-14T00:00:00Z','2026-06-14T18:00:00Z','2026-06-19T00:00:00Z','2026-06-19T18:00:00Z','2026-06-23T20:00:00Z','2026-06-23T20:00:00Z'],
-  ],
-  F: [
-    ['2026-06-14T15:00:00Z','2026-06-14T21:00:00Z','2026-06-19T15:00:00Z','2026-06-19T21:00:00Z','2026-06-24T20:00:00Z','2026-06-24T20:00:00Z'],
-  ],
-  G: [
-    ['2026-06-15T00:00:00Z','2026-06-15T18:00:00Z','2026-06-20T00:00:00Z','2026-06-20T18:00:00Z','2026-06-24T16:00:00Z','2026-06-24T16:00:00Z'],
-  ],
-  H: [
-    ['2026-06-15T03:00:00Z','2026-06-15T21:00:00Z','2026-06-20T03:00:00Z','2026-06-20T21:00:00Z','2026-06-25T00:00:00Z','2026-06-25T00:00:00Z'],
-  ],
-  I: [
-    ['2026-06-16T00:00:00Z','2026-06-16T18:00:00Z','2026-06-21T00:00:00Z','2026-06-21T18:00:00Z','2026-06-25T20:00:00Z','2026-06-25T20:00:00Z'],
-  ],
-  J: [
-    ['2026-06-16T03:00:00Z','2026-06-16T15:00:00Z','2026-06-21T03:00:00Z','2026-06-21T15:00:00Z','2026-06-26T00:00:00Z','2026-06-26T00:00:00Z'],
-  ],
-  K: [
-    ['2026-06-11T18:00:00Z','2026-06-12T00:00:00Z','2026-06-16T15:00:00Z','2026-06-17T03:00:00Z','2026-06-26T20:00:00Z','2026-06-26T20:00:00Z'],
-  ],
-  L: [
-    ['2026-06-13T15:00:00Z','2026-06-14T03:00:00Z','2026-06-18T15:00:00Z','2026-06-18T18:00:00Z','2026-06-27T20:00:00Z','2026-06-27T20:00:00Z'],
-  ]
-};
 
 function generateGroupMatches() {
   const matches = [];
   let id = 1;
   for (const [group, teams] of Object.entries(GROUPS)) {
-    const dates = GROUP_SCHEDULE[group] ? GROUP_SCHEDULE[group][0] : [];
-    let dateIdx = 0;
     for (let i = 0; i < teams.length; i++) {
       for (let j = i + 1; j < teams.length; j++) {
         matches.push({
@@ -1616,9 +1576,8 @@ function generateGroupMatches() {
           round: 'groups',
           home: teams[i],
           away: teams[j],
-          datetime: dates[dateIdx] || null
+          datetime: null  // se llena con el fixture oficial importado de la API
         });
-        dateIdx++;
       }
     }
   }
@@ -1627,17 +1586,26 @@ function generateGroupMatches() {
 
 const GROUP_MATCHES = generateGroupMatches();
 
+// Fecha efectiva de un partido: la oficial importada (state.groupDates) o null.
+// Si no hay fecha confirmada, el partido NO se bloquea (evita cierres por fechas falsas).
+function getMatchDate(match) {
+  if (state.groupDates && state.groupDates[match.id]) return state.groupDates[match.id];
+  return match.datetime || null;
+}
+
 function isMatchLocked(match) {
-  if (!match.datetime) return false;
-  const kickoff = new Date(match.datetime).getTime();
+  const dt = getMatchDate(match);
+  if (!dt) return false;
+  const kickoff = new Date(dt).getTime();
   const lockTime = kickoff - (LOCK_HOURS * 60 * 60 * 1000);
   return Date.now() >= lockTime;
 }
 
 function getMatchLockStatus(match) {
-  if (!match.datetime) return { status: 'open', label: 'Abierto', timeLeft: '' };
+  const dt = getMatchDate(match);
+  if (!dt) return { status: 'open', label: 'Por confirmar', timeLeft: '' };
   const now = Date.now();
-  const kickoff = new Date(match.datetime).getTime();
+  const kickoff = new Date(dt).getTime();
   const lockTime = kickoff - (LOCK_HOURS * 60 * 60 * 1000);
   const msLeft = lockTime - now;
 
@@ -1715,6 +1683,7 @@ let state = {
   predictions: {},
   results: {},
   approvedEmails: {},
+  groupDates: {},        // { matchId: datetime } - fechas oficiales del fixture importado
   knockout: {},          // { round32: { open, matches:[{id,home,away,datetime}] }, ... }
   knockoutResults: {},   // { matchId: { h90, a90, h120, a120, penWinner } }
   view: 'home',
@@ -1782,6 +1751,13 @@ function initFirebaseListeners() {
     }
   });
 
+  db.ref('groupDates').on('value', snap => {
+    const data = snap.val();
+    state.groupDates = data || {};
+    saveState();
+    if (['predictions', 'admin'].includes(state.view)) render();
+  });
+
   db.ref('knockout').on('value', snap => {
     const data = snap.val();
     state.knockout = data || {};
@@ -1815,6 +1791,10 @@ function syncApprovedEmails() {
 
 function syncKnockout() {
   saveToFirebase('knockout', state.knockout);
+}
+
+function syncGroupDates() {
+  saveToFirebase('groupDates', state.groupDates);
 }
 
 function syncKnockoutResults() {
@@ -2427,7 +2407,7 @@ function renderPredictions() {
         <div class="match-card ${pred ? 'saved' : ''} ${locked ? 'locked' : ''}" id="match-${m.id}">
           <div class="match-meta">
             <span class="round-badge">Grupo ${m.group}</span>
-            <span class="match-datetime">${formatMatchDate(m.datetime)}</span>
+            <span class="match-datetime">${getMatchDate(m) ? formatMatchDate(getMatchDate(m)) : 'Fecha por confirmar'}</span>
             <span class="lock-badge ${lockInfo.status}">${lockInfo.status === 'locked' ? '&#128274; ' : lockInfo.status === 'closing' ? '&#9200; ' : '&#128275; '}${lockInfo.label}</span>
           </div>
           ${result ? `<div style="text-align:center;font-size:0.75rem;color:var(--success);margin-bottom:4px">&#10003; Resultado oficial</div>` : ''}
@@ -3226,6 +3206,12 @@ function renderAdmin() {
           <span style="font-size:0.75rem;color:var(--text-muted)">(${state.apiKey.substring(0, 8)}...)</span>
           <button class="btn btn-outline btn-sm" onclick="removeApiKey()">Eliminar</button>
         </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <button class="btn btn-gold btn-sm" onclick="importGroupFixtureFromApi()">&#128197; Importar fechas oficiales de grupos</button>
+          <span style="font-size:0.72rem;color:var(--text-muted);align-self:center">
+            ${Object.keys(state.groupDates || {}).length}/${GROUP_MATCHES.length} fechas cargadas
+          </span>
+        </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           ${liveScoresInterval
             ? `<button class="btn btn-sm" style="background:var(--danger);color:#fff" onclick="stopLiveScores()">&#9209; Detener Live</button>
@@ -3373,6 +3359,48 @@ function renderAdminKnockout() {
 
   h += '</div>';
   return h;
+}
+
+async function importGroupFixtureFromApi() {
+  if (!state.apiKey) return toast('Configura la API key primero', 'error');
+  toast('Importando fixture oficial de grupos...', 'info');
+  try {
+    const resp = await fetch('https://api.football-data.org/v4/competitions/WC/matches?stage=GROUP_STAGE', {
+      headers: { 'X-Auth-Token': state.apiKey }
+    });
+    if (!resp.ok) {
+      if (resp.status === 403) return toast('API sin permiso para esta competicion', 'error');
+      if (resp.status === 429) return toast('Limite de API alcanzado, espera 1 min', 'error');
+      return toast('Error API: ' + resp.status, 'error');
+    }
+    const data = await resp.json();
+    if (!data.matches || data.matches.length === 0) return toast('La API aun no tiene el fixture de grupos', 'info');
+
+    let matched = 0;
+    const newDates = {};
+    data.matches.forEach(apiM => {
+      const home = findTeamByApiName(apiM.homeTeam && (apiM.homeTeam.name || apiM.homeTeam.shortName));
+      const away = findTeamByApiName(apiM.awayTeam && (apiM.awayTeam.name || apiM.awayTeam.shortName));
+      if (!home || !away || !apiM.utcDate) return;
+      // Encontrar el GROUP_MATCH con el mismo par de equipos (en cualquier orden)
+      const gm = GROUP_MATCHES.find(m =>
+        (m.home.code === home.code && m.away.code === away.code) ||
+        (m.home.code === away.code && m.away.code === home.code)
+      );
+      if (gm) { newDates[gm.id] = apiM.utcDate; matched++; }
+    });
+
+    if (matched === 0) return toast('No se pudieron emparejar los partidos (equipos aun por definir?)', 'info');
+
+    state.groupDates = { ...state.groupDates, ...newDates };
+    saveState();
+    syncGroupDates();
+    toast(matched + ' fechas oficiales importadas! El bloqueo 6h ya usa el calendario real.', 'success');
+    render();
+  } catch(e) {
+    console.error(e);
+    toast('Error al importar fixture: ' + e.message, 'error');
+  }
 }
 
 async function importKnockoutFromApi(roundId) {
@@ -3543,7 +3571,7 @@ function resetAll() {
     if (firebaseReady) {
       db.ref().remove().catch(e => console.error(e));
     }
-    state = { currentUser: null, users: [], predictions: {}, results: {}, approvedEmails: {}, knockout: {}, knockoutResults: {}, view: 'home', groupFilter: 'all' };
+    state = { currentUser: null, users: [], predictions: {}, results: {}, approvedEmails: {}, groupDates: {}, knockout: {}, knockoutResults: {}, view: 'home', groupFilter: 'all' };
     navigate('home');
     toast('Todo reiniciado', 'info');
   }
