@@ -881,6 +881,70 @@ main {
   margin-bottom: 1.5rem;
 }
 
+/* ===== AGRUPACION POR DIA ===== */
+.day-group { margin-bottom: 1.8rem; }
+
+.day-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  background: var(--glass);
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--accent);
+  position: sticky;
+  top: 72px;
+  z-index: 10;
+  backdrop-filter: blur(12px);
+}
+
+.day-header .day-name {
+  font-weight: 700;
+  font-size: 0.95rem;
+  text-transform: capitalize;
+  color: var(--text);
+}
+
+.day-header .day-count {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-left: auto;
+  background: rgba(255,255,255,0.06);
+  padding: 3px 10px;
+  border-radius: 12px;
+}
+
+/* Hora y grupo en cada tarjeta - estilo neutro y consistente */
+.match-time {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.group-chip {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.06);
+  padding: 2px 8px;
+  border-radius: 10px;
+  letter-spacing: 0.3px;
+}
+
+.match-status {
+  font-size: 0.7rem;
+  font-weight: 600;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.match-status.open { color: var(--text-muted); }
+.match-status.closing { color: var(--accent); }
+.match-status.locked { color: var(--text-muted); opacity: 0.7; }
+.match-status.done { color: var(--accent); }
+
 .filter-tab {
   padding: 6px 16px;
   border-radius: 20px;
@@ -2441,6 +2505,79 @@ function renderChampionSection(userPreds) {
 }
 
 // ===== PREDICTIONS VIEW =====
+function formatDayHeader(dt) {
+  const d = new Date(dt);
+  const s = d.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' });
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function formatTime(dt) {
+  return new Date(dt).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function dayKeyOf(dt) {
+  // YYYY-MM-DD en hora LOCAL del usuario (para agrupar bien por dia)
+  return dt ? new Date(dt).toLocaleDateString('en-CA') : 'zzz-sin-fecha';
+}
+
+function renderMatchCard(m, userPreds) {
+  const pred = userPreds.matches[m.id];
+  const result = state.results[m.id];
+  const locked = isMatchLocked(m);
+  const lockInfo = getMatchLockStatus(m);
+  const dt = getMatchDate(m);
+
+  // Estado simplificado: un solo indicador, paleta neutra
+  let statusHtml = '';
+  if (result) statusHtml = '<span class="match-status done">&#10003; Jugado</span>';
+  else if (lockInfo.status === 'locked') statusHtml = '<span class="match-status locked">&#128274; Cerrado</span>';
+  else if (lockInfo.status === 'closing') statusHtml = '<span class="match-status closing">&#9200; ' + lockInfo.label + '</span>';
+  else if (pred) statusHtml = '<span class="match-status done">&#10003; Guardado</span>';
+  else statusHtml = '<span class="match-status open">Pendiente</span>';
+
+  return `
+    <div class="match-card ${pred ? 'saved' : ''} ${locked ? 'locked' : ''}" id="match-${m.id}">
+      <div class="match-meta">
+        ${dt ? `<span class="match-time">${formatTime(dt)}</span>` : '<span class="match-time" style="color:var(--text-muted)">--:--</span>'}
+        <span class="group-chip">Grupo ${m.group}</span>
+        ${statusHtml}
+      </div>
+      <div class="match-teams">
+        <div class="match-team home">
+          <span class="flag">${m.home.flag}</span>
+          <span class="name">${m.home.name}</span>
+        </div>
+        <div class="match-score">
+          <input type="number" min="0" max="20" id="h-${m.id}"
+                 value="${pred ? pred.home : ''}"
+                 ${locked ? 'disabled' : ''}
+                 onchange="markUnsaved(${m.id})" placeholder="-">
+          <span class="vs">VS</span>
+          <input type="number" min="0" max="20" id="a-${m.id}"
+                 value="${pred ? pred.away : ''}"
+                 ${locked ? 'disabled' : ''}
+                 onchange="markUnsaved(${m.id})" placeholder="-">
+        </div>
+        <div class="match-team away">
+          <span class="flag">${m.away.flag}</span>
+          <span class="name">${m.away.name}</span>
+        </div>
+      </div>
+      ${result ? `
+        <div style="text-align:center;margin-top:8px;font-size:0.8rem;color:var(--text-muted)">
+          Resultado: <strong style="color:var(--text)">${result.home} - ${result.away}</strong>
+          ${pred ? `<span style="margin-left:10px;color:var(--accent)">+${calcMatchPoints(pred, result, 'groups')} pts</span>` : ''}
+        </div>
+      ` : ''}
+      <div class="match-actions">
+        ${locked
+          ? `<span style="font-size:0.78rem;color:var(--text-muted)">&#128274; Predicciones cerradas</span>`
+          : `<button class="btn btn-gold btn-sm" onclick="savePrediction(${m.id})">Guardar</button>`
+        }
+      </div>
+    </div>`;
+}
+
 function renderPredictions() {
   const raw = state.predictions[state.currentUser.id] || {};
   const userPreds = { matches: raw.matches || {}, champion: raw.champion || null, bracket: raw.bracket || {}, championLocked: raw.championLocked || false };
@@ -2451,6 +2588,35 @@ function renderPredictions() {
   const savedCount = Object.keys(userPreds.matches).length;
   const totalCount = GROUP_MATCHES.length;
   const pct = Math.round((savedCount / totalCount) * 100);
+
+  // Agrupar por dia (en hora local) y ordenar cronologicamente
+  const byDay = {};
+  filteredMatches.forEach(m => {
+    const k = dayKeyOf(getMatchDate(m));
+    (byDay[k] = byDay[k] || []).push(m);
+  });
+  const sortedDays = Object.keys(byDay).sort();
+  // dentro de cada dia, ordenar por hora
+  sortedDays.forEach(k => byDay[k].sort((a,b) => {
+    const da = getMatchDate(a), db = getMatchDate(b);
+    return (da ? new Date(da).getTime() : 0) - (db ? new Date(db).getTime() : 0);
+  }));
+
+  const daysHtml = sortedDays.map(k => {
+    const matches = byDay[k];
+    const dt = getMatchDate(matches[0]);
+    const header = dt ? formatDayHeader(dt) : 'Fecha por confirmar';
+    return `
+      <div class="day-group">
+        <div class="day-header">
+          <span class="day-name">${header}</span>
+          <span class="day-count">${matches.length} partido${matches.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div class="matches-container">
+          ${matches.map(m => renderMatchCard(m, userPreds)).join('')}
+        </div>
+      </div>`;
+  }).join('');
 
   return `
     <div class="section-header">
@@ -2471,57 +2637,7 @@ function renderPredictions() {
       `).join('')}
     </div>
 
-    <div class="matches-container">
-      ${filteredMatches.map(m => {
-        const pred = userPreds.matches[m.id];
-        const result = state.results[m.id];
-        const locked = isMatchLocked(m);
-        const lockInfo = getMatchLockStatus(m);
-        return `
-        <div class="match-card ${pred ? 'saved' : ''} ${locked ? 'locked' : ''}" id="match-${m.id}">
-          <div class="match-meta">
-            <span class="round-badge">Grupo ${m.group}</span>
-            <span class="match-datetime">${getMatchDate(m) ? formatMatchDate(getMatchDate(m)) : 'Fecha por confirmar'}</span>
-            <span class="lock-badge ${lockInfo.status}">${lockInfo.status === 'locked' ? '&#128274; ' : lockInfo.status === 'closing' ? '&#9200; ' : '&#128275; '}${lockInfo.label}</span>
-          </div>
-          ${result ? `<div style="text-align:center;font-size:0.75rem;color:var(--success);margin-bottom:4px">&#10003; Resultado oficial</div>` : ''}
-          ${pred && !result ? `<div style="text-align:center;font-size:0.75rem;color:var(--success);margin-bottom:4px">&#10003; Guardado</div>` : ''}
-          <div class="match-teams">
-            <div class="match-team home">
-              <span class="flag">${m.home.flag}</span>
-              <span class="name">${m.home.name}</span>
-            </div>
-            <div class="match-score">
-              <input type="number" min="0" max="20" id="h-${m.id}"
-                     value="${pred ? pred.home : ''}"
-                     ${locked ? 'disabled' : ''}
-                     onchange="markUnsaved(${m.id})" placeholder="-">
-              <span class="vs">VS</span>
-              <input type="number" min="0" max="20" id="a-${m.id}"
-                     value="${pred ? pred.away : ''}"
-                     ${locked ? 'disabled' : ''}
-                     onchange="markUnsaved(${m.id})" placeholder="-">
-            </div>
-            <div class="match-team away">
-              <span class="flag">${m.away.flag}</span>
-              <span class="name">${m.away.name}</span>
-            </div>
-          </div>
-          ${result ? `
-            <div style="text-align:center;margin-top:8px;font-size:0.8rem;color:var(--text-muted)">
-              Resultado: <strong style="color:var(--text)">${result.home} - ${result.away}</strong>
-              ${pred ? `<span style="margin-left:10px;color:var(--accent)">+${calcMatchPoints(pred, result, 'groups')} pts</span>` : ''}
-            </div>
-          ` : ''}
-          <div class="match-actions">
-            ${locked
-              ? `<span style="font-size:0.78rem;color:var(--danger)">&#128274; Predicciones cerradas</span>`
-              : `<button class="btn btn-gold btn-sm" onclick="savePrediction(${m.id})">Guardar</button>`
-            }
-          </div>
-        </div>`;
-      }).join('')}
-    </div>`;
+    ${daysHtml}`;
 }
 
 function filterGroup(g) {
