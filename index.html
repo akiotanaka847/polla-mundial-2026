@@ -1621,7 +1621,7 @@ const KO_POINTS = {
   penalty: 3     // si va a penales: ganador correcto
 };
 
-const LOCK_HOURS = 6;
+const LOCK_HOURS = 2;
 // El campeon se debe elegir antes del primer partido del mundial
 // Primer partido oficial: Mexico vs Sudafrica, 2026-06-11T19:00:00Z -> 6h antes = 13:00Z
 const CHAMPION_DEADLINE = '2026-06-11T13:00:00Z';
@@ -2708,7 +2708,7 @@ function confirmChampion(code) {
 
 function savePrediction(matchId) {
   const match = GROUP_MATCHES.find(m => m.id === matchId);
-  if (match && isMatchLocked(match)) return toast('Predicciones cerradas para este partido (6h antes del inicio)', 'error');
+  if (match && isMatchLocked(match)) return toast('Predicciones cerradas para este partido (2h antes del inicio)', 'error');
   const h = document.getElementById(`h-${matchId}`);
   const a = document.getElementById(`a-${matchId}`);
   if (h.value === '' || a.value === '') return toast('Ingresa ambos marcadores', 'error');
@@ -3042,7 +3042,7 @@ function findKoMatch(matchId) {
 function saveKnockoutPrediction(matchId, roundId) {
   const m = findKoMatch(matchId);
   if (!m) return;
-  if (isKoMatchLocked(m)) return toast('Este partido ya esta cerrado (6h antes del inicio).', 'error');
+  if (isKoMatchLocked(m)) return toast('Este partido ya esta cerrado (2h antes del inicio).', 'error');
 
   const h90 = document.getElementById('ko-h90-' + matchId).value;
   const a90 = document.getElementById('ko-a90-' + matchId).value;
@@ -3269,7 +3269,7 @@ function renderRules() {
       <div class="rule-card">
         <h3><span class="icon" style="background:rgba(239,68,68,0.15)">&#128274;</span> Bloqueos y Plazos</h3>
         <ul>
-          <li>Todas las predicciones se bloquean <strong>6 horas antes</strong> de cada partido</li>
+          <li>Todas las predicciones se bloquean <strong>2 horas antes</strong> de cada partido</li>
           <li>El campeon se elige <strong>UNA SOLA VEZ</strong> — no se puede cambiar. Plazo: antes del primer partido</li>
           <li>Las eliminatorias se abren <strong>ronda por ronda</strong> cuando se definen los cruces</li>
           <li>Los cruces se importan automaticamente de la API (o el admin los arma)</li>
@@ -3585,7 +3585,7 @@ async function importGroupFixtureFromApi() {
     state.groupDates = { ...state.groupDates, ...newDates };
     saveState();
     syncGroupDates();
-    toast(matched + ' fechas oficiales importadas! El bloqueo 6h ya usa el calendario real.', 'success');
+    toast(matched + ' fechas oficiales importadas! El bloqueo ya usa el calendario real.', 'success');
     render();
   } catch(e) {
     console.error(e);
