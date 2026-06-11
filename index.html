@@ -1961,6 +1961,7 @@ function subscribeMyPredictions() {
   myPredRef.on('value', snap => {
     const data = snap.val();
     if (data) {
+      data.matches = normalizeMatches(data.matches);
       state.predictions[state.currentUser.id] = data;
       saveState();
       // Repintar cuando los datos llegan de la nube (red lenta / otro dispositivo),
@@ -2571,12 +2572,12 @@ function renderMatchCard(m, userPreds) {
           <input type="number" min="0" max="20" id="h-${m.id}" inputmode="numeric"
                  value="${pred ? pred.home : ''}"
                  ${locked ? 'disabled' : ''}
-                 onchange="autoSaveGroup(${m.id})" oninput="autoSaveGroup(${m.id})" placeholder="-">
+                 oninput="autoSaveGroup(${m.id})" onchange="flushSaveGroup(${m.id})" onblur="flushSaveGroup(${m.id})" placeholder="-">
           <span class="vs">VS</span>
           <input type="number" min="0" max="20" id="a-${m.id}" inputmode="numeric"
                  value="${pred ? pred.away : ''}"
                  ${locked ? 'disabled' : ''}
-                 onchange="autoSaveGroup(${m.id})" oninput="autoSaveGroup(${m.id})" placeholder="-">
+                 oninput="autoSaveGroup(${m.id})" onchange="flushSaveGroup(${m.id})" onblur="flushSaveGroup(${m.id})" placeholder="-">
         </div>
         <div class="match-team away">
           <span class="flag">${m.away.flag}</span>
@@ -2600,7 +2601,7 @@ function renderMatchCard(m, userPreds) {
 
 function renderPredictions() {
   const raw = state.predictions[state.currentUser.id] || {};
-  const userPreds = { matches: raw.matches || {}, champion: raw.champion || null, bracket: raw.bracket || {}, championLocked: raw.championLocked || false };
+  const userPreds = { matches: normalizeMatches(raw.matches), champion: raw.champion || null, bracket: raw.bracket || {}, championLocked: raw.championLocked || false };
   const groups = Object.keys(GROUPS);
   const filterGroups = state.groupFilter === 'all' ? groups : [state.groupFilter];
   const filteredMatches = GROUP_MATCHES.filter(m => filterGroups.includes(m.group));
@@ -2657,7 +2658,13 @@ function renderPredictions() {
       `).join('')}
     </div>
 
-    ${daysHtml}`;
+    ${daysHtml}
+
+    <div style="position:sticky;bottom:12px;display:flex;justify-content:center;margin-top:20px;z-index:50">
+      <button class="btn btn-gold" style="box-shadow:0 6px 20px rgba(0,0,0,0.35)" onclick="saveAllVisibleGroup()">
+        &#128190; Guardar todo
+      </button>
+    </div>`;
 }
 
 function filterGroup(g) {
@@ -2665,12 +2672,25 @@ function filterGroup(g) {
   render();
 }
 
+// Firebase convierte objetos con claves enteras pequenas (0,1,2..) en arrays
+// al leerlos. Esto los regresa a objeto {matchId: pred} para que el resto del
+// codigo (conteos, guardados, render) sea consistente sin importar como llego.
+function normalizeMatches(matches) {
+  if (!matches) return {};
+  if (Array.isArray(matches)) {
+    const obj = {};
+    matches.forEach((v, i) => { if (v != null) obj[i] = v; });
+    return obj;
+  }
+  return matches;
+}
+
 function ensurePredictions() {
   if (!state.predictions[state.currentUser.id]) {
     state.predictions[state.currentUser.id] = { matches: {}, champion: null, bracket: {}, championLocked: false, bracketLocked: {}, knockout: {} };
   }
   const p = state.predictions[state.currentUser.id];
-  if (!p.matches) p.matches = {};
+  p.matches = normalizeMatches(p.matches);
   if (!p.bracket) p.bracket = {};
   if (!p.bracketLocked) p.bracketLocked = {};
   if (!p.knockout) p.knockout = {};
@@ -2780,9 +2800,48 @@ function markUnsaved(matchId) {
   if (card) card.classList.remove('saved');
 }
 
-// Autoguardado: guarda en cuanto ambos marcadores estan escritos.
-// Asi nadie pierde su prediccion por olvidar presionar un boton.
+// Autoguardado de marcadores de grupo.
+// CLAVE: en el telefono, si el usuario escribe y cambia de app / bloquea la
+// pantalla / navega antes de que termine la espera, el sistema mata el
+// temporizador y la prediccion se pierde. Por eso guardamos de forma INMEDIATA
+// al salir del campo (onchange/blur) y solo usamos debounce corto mientras teclea.
 let autoSaveTimers = {};
+
+// Guarda YA el marcador del partido (sin esperar). Devuelve true si guardo.
+function commitGroupPrediction(matchId) {
+  const match = GROUP_MATCHES.find(m => m.id === matchId);
+  if (match && isMatchLocked(match)) return false;
+  const h = document.getElementById(`h-${matchId}`);
+  const a = document.getElementById(`a-${matchId}`);
+  if (!h || !a || h.value === '' || a.value === '') return false;
+
+  clearTimeout(autoSaveTimers[matchId]);
+  const p = ensurePredictions();
+  p.matches[matchId] = { home: parseInt(h.value), away: parseInt(a.value) };
+  saveState();
+  syncPrediction(state.currentUser.id);
+
+  const card = document.getElementById(`match-${matchId}`);
+  if (card) card.classList.add('saved');
+  const hint = document.getElementById(`autosave-${matchId}`);
+  if (hint) { hint.innerHTML = '&#10003; Guardado'; hint.className = 'autosave-hint saved'; }
+  return true;
+}
+
+// onchange / blur: el usuario termino con el campo -> guardar AL INSTANTE.
+function flushSaveGroup(matchId) {
+  const h = document.getElementById(`h-${matchId}`);
+  const a = document.getElementById(`a-${matchId}`);
+  const hint = document.getElementById(`autosave-${matchId}`);
+  if (h && a && (h.value === '' || a.value === '')) {
+    if (hint) { hint.innerHTML = 'Falta un marcador'; hint.className = 'autosave-hint'; }
+    return;
+  }
+  commitGroupPrediction(matchId);
+}
+
+// oninput: mientras teclea -> debounce corto (feedback rapido). El guardado
+// definitivo lo garantiza flushSaveGroup al salir del campo.
 function autoSaveGroup(matchId) {
   const match = GROUP_MATCHES.find(m => m.id === matchId);
   if (match && isMatchLocked(match)) return;
@@ -2796,24 +2855,35 @@ function autoSaveGroup(matchId) {
     return;
   }
 
-  // Debounce: espera 600ms tras la ultima tecla antes de sincronizar a Firebase
   if (hint) { hint.innerHTML = '&#8635; Guardando...'; hint.className = 'autosave-hint saving'; }
   clearTimeout(autoSaveTimers[matchId]);
-  autoSaveTimers[matchId] = setTimeout(() => {
-    if (!state.predictions[state.currentUser.id]) {
-      state.predictions[state.currentUser.id] = { matches: {}, champion: null, bracket: {}, knockout: {} };
-    }
-    state.predictions[state.currentUser.id].matches[matchId] = {
-      home: parseInt(h.value),
-      away: parseInt(a.value)
-    };
-    saveState();
-    syncPrediction(state.currentUser.id);
-    const card = document.getElementById(`match-${matchId}`);
-    if (card) card.classList.add('saved');
-    const hint2 = document.getElementById(`autosave-${matchId}`);
-    if (hint2) { hint2.innerHTML = '&#10003; Guardado automaticamente'; hint2.className = 'autosave-hint saved'; }
-  }, 600);
+  autoSaveTimers[matchId] = setTimeout(() => commitGroupPrediction(matchId), 350);
+}
+
+// Red de seguridad: si el usuario abandona la pagina o manda la app al fondo
+// (cambiar de app, bloquear el telefono), guardar TODO lo pendiente de inmediato.
+function flushAllPendingGroupSaves() {
+  if (!state.currentUser) return;
+  document.querySelectorAll('input[id^="h-"]').forEach(h => {
+    const matchId = parseInt(h.id.slice(2));
+    if (!isNaN(matchId)) commitGroupPrediction(matchId);
+  });
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushAllPendingGroupSaves();
+});
+window.addEventListener('pagehide', flushAllPendingGroupSaves);
+
+// Boton de respaldo: guarda TODAS las predicciones visibles de una vez.
+function saveAllVisibleGroup() {
+  if (!state.currentUser) return;
+  let count = 0;
+  document.querySelectorAll('input[id^="h-"]').forEach(h => {
+    const matchId = parseInt(h.id.slice(2));
+    if (!isNaN(matchId) && commitGroupPrediction(matchId)) count++;
+  });
+  if (count) toast(`${count} prediccion${count !== 1 ? 'es' : ''} guardada${count !== 1 ? 's' : ''}`, 'success');
+  else toast('Escribe algun marcador completo primero', 'info');
 }
 
 // ===== BRACKET VIEW =====
