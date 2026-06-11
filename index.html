@@ -945,6 +945,14 @@ main {
 .match-status.locked { color: var(--text-muted); opacity: 0.7; }
 .match-status.done { color: var(--accent); }
 
+.autosave-hint {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.autosave-hint.saving { color: var(--accent); }
+.autosave-hint.saved { color: var(--success); }
+
 .filter-tab {
   padding: 6px 16px;
   border-radius: 20px;
@@ -1848,7 +1856,12 @@ function saveState() {
 
 function saveToFirebase(path, data) {
   if (!firebaseReady) return;
-  db.ref(path).set(data).catch(e => console.error('Firebase write error:', e));
+  db.ref(path).set(data).catch(e => {
+    console.error('Firebase write error:', e);
+    // No fallar en silencio: si la nube rechaza la escritura (permisos caducados,
+    // sin conexion), el usuario debe enterarse para no creer que guardo.
+    toast('No se pudo guardar en la nube. Revisa tu conexion.', 'error');
+  });
 }
 
 function initFirebaseListeners() {
@@ -1950,6 +1963,13 @@ function subscribeMyPredictions() {
     if (data) {
       state.predictions[state.currentUser.id] = data;
       saveState();
+      // Repintar cuando los datos llegan de la nube (red lenta / otro dispositivo),
+      // PERO nunca mientras alguien escribe un marcador: eso le borraria lo tecleado.
+      const el = document.activeElement;
+      const editing = el && el.tagName === 'INPUT';
+      if (!editing && ['predictions', 'bracket', 'dashboard', 'home'].includes(state.view)) {
+        render();
+      }
     }
   });
 }
@@ -2548,15 +2568,15 @@ function renderMatchCard(m, userPreds) {
           <span class="name">${m.home.name}</span>
         </div>
         <div class="match-score">
-          <input type="number" min="0" max="20" id="h-${m.id}"
+          <input type="number" min="0" max="20" id="h-${m.id}" inputmode="numeric"
                  value="${pred ? pred.home : ''}"
                  ${locked ? 'disabled' : ''}
-                 onchange="markUnsaved(${m.id})" placeholder="-">
+                 onchange="autoSaveGroup(${m.id})" oninput="autoSaveGroup(${m.id})" placeholder="-">
           <span class="vs">VS</span>
-          <input type="number" min="0" max="20" id="a-${m.id}"
+          <input type="number" min="0" max="20" id="a-${m.id}" inputmode="numeric"
                  value="${pred ? pred.away : ''}"
                  ${locked ? 'disabled' : ''}
-                 onchange="markUnsaved(${m.id})" placeholder="-">
+                 onchange="autoSaveGroup(${m.id})" oninput="autoSaveGroup(${m.id})" placeholder="-">
         </div>
         <div class="match-team away">
           <span class="flag">${m.away.flag}</span>
@@ -2572,7 +2592,7 @@ function renderMatchCard(m, userPreds) {
       <div class="match-actions">
         ${locked
           ? `<span style="font-size:0.78rem;color:var(--text-muted)">&#128274; Predicciones cerradas</span>`
-          : `<button class="btn btn-gold btn-sm" onclick="savePrediction(${m.id})">Guardar</button>`
+          : `<span class="autosave-hint" id="autosave-${m.id}">${pred ? '&#10003; Guardado automaticamente' : 'Escribe el marcador (se guarda solo)'}</span>`
         }
       </div>
     </div>`;
@@ -2758,6 +2778,42 @@ function saveAllPredictions() {
 function markUnsaved(matchId) {
   const card = document.getElementById(`match-${matchId}`);
   if (card) card.classList.remove('saved');
+}
+
+// Autoguardado: guarda en cuanto ambos marcadores estan escritos.
+// Asi nadie pierde su prediccion por olvidar presionar un boton.
+let autoSaveTimers = {};
+function autoSaveGroup(matchId) {
+  const match = GROUP_MATCHES.find(m => m.id === matchId);
+  if (match && isMatchLocked(match)) return;
+  const h = document.getElementById(`h-${matchId}`);
+  const a = document.getElementById(`a-${matchId}`);
+  const hint = document.getElementById(`autosave-${matchId}`);
+  if (!h || !a) return;
+
+  if (h.value === '' || a.value === '') {
+    if (hint) { hint.innerHTML = 'Escribe ambos marcadores'; hint.className = 'autosave-hint'; }
+    return;
+  }
+
+  // Debounce: espera 600ms tras la ultima tecla antes de sincronizar a Firebase
+  if (hint) { hint.innerHTML = '&#8635; Guardando...'; hint.className = 'autosave-hint saving'; }
+  clearTimeout(autoSaveTimers[matchId]);
+  autoSaveTimers[matchId] = setTimeout(() => {
+    if (!state.predictions[state.currentUser.id]) {
+      state.predictions[state.currentUser.id] = { matches: {}, champion: null, bracket: {}, knockout: {} };
+    }
+    state.predictions[state.currentUser.id].matches[matchId] = {
+      home: parseInt(h.value),
+      away: parseInt(a.value)
+    };
+    saveState();
+    syncPrediction(state.currentUser.id);
+    const card = document.getElementById(`match-${matchId}`);
+    if (card) card.classList.add('saved');
+    const hint2 = document.getElementById(`autosave-${matchId}`);
+    if (hint2) { hint2.innerHTML = '&#10003; Guardado automaticamente'; hint2.className = 'autosave-hint saved'; }
+  }, 600);
 }
 
 // ===== BRACKET VIEW =====
