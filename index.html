@@ -1622,9 +1622,9 @@ const KO_POINTS = {
 };
 
 const LOCK_HOURS = 2;
-// El campeon se debe elegir antes del primer partido del mundial
-// Primer partido oficial: Mexico vs Sudafrica, 2026-06-11T19:00:00Z -> 6h antes = 13:00Z
-const CHAMPION_DEADLINE = '2026-06-11T13:00:00Z';
+// El campeon se puede elegir hasta que TODOS los equipos jueguen su primer
+// partido (fin de la jornada 1: 18 jun 02:00Z). Cierra al iniciar la jornada 2.
+const CHAMPION_DEADLINE = '2026-06-18T16:00:00Z';
 
 
 // Fechas oficiales del fixture FIFA 2026 (importadas de football-data.org)
@@ -2666,7 +2666,7 @@ function pickChampion(code) {
   }
 
   if (isChampionDeadlinePassed()) {
-    return toast('El plazo para elegir campeon ya paso (6h antes del primer partido).', 'error');
+    return toast('El plazo para elegir campeon ya paso (cierra al iniciar la jornada 2).', 'error');
   }
 
   const team = ALL_TEAMS.find(t => t.code === code);
@@ -3270,7 +3270,7 @@ function renderRules() {
         <h3><span class="icon" style="background:rgba(239,68,68,0.15)">&#128274;</span> Bloqueos y Plazos</h3>
         <ul>
           <li>Todas las predicciones se bloquean <strong>2 horas antes</strong> de cada partido</li>
-          <li>El campeon se elige <strong>UNA SOLA VEZ</strong> — no se puede cambiar. Plazo: antes del primer partido</li>
+          <li>El campeon se elige <strong>UNA SOLA VEZ</strong> — no se puede cambiar. Plazo: hasta que todos jueguen su 1er partido (inicio jornada 2)</li>
           <li>Las eliminatorias se abren <strong>ronda por ronda</strong> cuando se definen los cruces</li>
           <li>Los cruces se importan automaticamente de la API (o el admin los arma)</li>
         </ul>
