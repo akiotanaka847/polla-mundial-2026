@@ -1738,6 +1738,15 @@ const GROUP_MATCHES = generateGroupMatches();
 
 // Fecha efectiva de un partido: la oficial importada (state.groupDates) o null.
 // Si no hay fecha confirmada, el partido NO se bloquea (evita cierres por fechas falsas).
+// Hora CONFIABLE: Date.now() usa el reloj local, que el usuario puede atrasar
+// para burlar el cierre de predicciones. Firebase nos da el desfase real contra
+// la hora del servidor (/.info/serverTimeOffset); al sumarlo obtenemos la hora
+// del servidor aunque el dispositivo tenga el reloj cambiado.
+let serverTimeOffset = 0;
+function serverNow() {
+  return Date.now() + serverTimeOffset;
+}
+
 function getMatchDate(match) {
   if (state.groupDates && state.groupDates[match.id]) return state.groupDates[match.id];
   return match.datetime || null;
@@ -1748,13 +1757,13 @@ function isMatchLocked(match) {
   if (!dt) return false;
   const kickoff = new Date(dt).getTime();
   const lockTime = kickoff - (LOCK_HOURS * 60 * 60 * 1000);
-  return Date.now() >= lockTime;
+  return serverNow() >= lockTime;
 }
 
 function getMatchLockStatus(match) {
   const dt = getMatchDate(match);
   if (!dt) return { status: 'open', label: 'Por confirmar', timeLeft: '' };
-  const now = Date.now();
+  const now = serverNow();
   const kickoff = new Date(dt).getTime();
   const lockTime = kickoff - (LOCK_HOURS * 60 * 60 * 1000);
   const msLeft = lockTime - now;
@@ -1781,11 +1790,11 @@ function formatMatchDate(datetime) {
 }
 
 function isChampionDeadlinePassed() {
-  return Date.now() >= new Date(CHAMPION_DEADLINE).getTime();
+  return serverNow() >= new Date(CHAMPION_DEADLINE).getTime();
 }
 
 function getDeadlineCountdown(deadline) {
-  const ms = new Date(deadline).getTime() - Date.now();
+  const ms = new Date(deadline).getTime() - serverNow();
   if (ms <= 0) return { passed: true, label: 'Cerrado' };
   const days = Math.floor(ms / 86400000);
   const hours = Math.floor((ms % 86400000) / 3600000);
@@ -1865,6 +1874,18 @@ function saveToFirebase(path, data) {
 }
 
 function initFirebaseListeners() {
+  // Sincronizar con la hora del servidor de Firebase. Si el usuario cambia el
+  // reloj de su dispositivo, este desfase lo compensa y el cierre de
+  // predicciones sigue usando la hora real.
+  db.ref('/.info/serverTimeOffset').on('value', snap => {
+    const off = snap.val();
+    if (typeof off === 'number') {
+      serverTimeOffset = off;
+      // Repintar para que los candados/contadores reflejen la hora correcta
+      if (['predictions', 'bracket', 'dashboard', 'home'].includes(state.view)) render();
+    }
+  });
+
   db.ref('users').on('value', snap => {
     const data = snap.val();
     if (data) {
@@ -3000,7 +3021,7 @@ function calcKnockoutPoints(pred, result, roundId, match) {
 function isKoMatchLocked(match) {
   if (!match.datetime) return false;
   const kickoff = new Date(match.datetime).getTime();
-  return Date.now() >= (kickoff - LOCK_HOURS * 3600000);
+  return serverNow() >= (kickoff - LOCK_HOURS * 3600000);
 }
 
 function renderBracket() {
