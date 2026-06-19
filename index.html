@@ -3925,7 +3925,7 @@ function renderDashboard() {
     ...u,
     points: calcUserPoints(u.id),
     exactos: countExactScores(u.id),
-    predictions: Object.keys((state.predictions[u.id] || {}).matches || {}).length
+    predictions: Object.keys(normalizeMatches((state.predictions[u.id] || {}).matches)).length
   })).sort((a, b) => b.points - a.points || b.exactos - a.exactos);
 
   const totalPrize = state.users.filter(u => u.paid !== false).length * ENTRY_FEE;
@@ -3942,8 +3942,11 @@ function renderDashboard() {
 
   let totalExact = 0, totalCorrectWinner = 0, totalPredictions = 0;
   state.users.forEach(u => {
-    const preds = (state.predictions[u.id] || {}).matches || {};
+    // normalizeMatches quita los huecos null que Firebase crea al guardar
+    // marcadores como array; sin esto, pred puede ser null y romper el dashboard.
+    const preds = normalizeMatches((state.predictions[u.id] || {}).matches);
     Object.entries(preds).forEach(([mid, pred]) => {
+      if (!pred) return;
       const result = state.results[mid];
       if (!result) return;
       totalPredictions++;
