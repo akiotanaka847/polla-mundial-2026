@@ -8,8 +8,19 @@
 <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>%F0%9F%8F%86</text></svg>">
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+<!-- Twemoji: muestra las banderas como imagenes para que se vean en Windows tambien -->
+<script src="https://cdn.jsdelivr.net/npm/@twemoji/api@15.1.0/dist/twemoji.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&display=swap');
+
+/* Twemoji: las banderas se convierten en <img>; que escalen como el texto */
+img.emoji {
+  height: 1em;
+  width: 1em;
+  margin: 0 0.05em 0 0.1em;
+  vertical-align: -0.1em;
+  display: inline-block;
+}
 
 :root {
   --primary: #8b1538;
@@ -4289,12 +4300,25 @@ function deleteUser(userId) {
 }
 
 // ===== RENDER =====
+// Convierte los emojis del DOM en imagenes (banderas visibles en Windows).
+// Idempotente: los ya convertidos son <img>, no texto, asi que se ignoran.
+function twemojiParse() {
+  if (window.twemoji) {
+    twemoji.parse(document.body, {
+      base: 'https://cdn.jsdelivr.net/gh/jdecked/twemoji@15.1.0/assets/',
+      folder: 'svg',
+      ext: '.svg'
+    });
+  }
+}
+
 function render() {
   const app = document.getElementById('app');
   renderNav();
 
   if (!state.currentUser) {
     app.innerHTML = renderAuth();
+    twemojiParse();
     return;
   }
 
@@ -4324,6 +4348,8 @@ function render() {
     default:
       app.innerHTML = renderDashboard();
   }
+
+  twemojiParse();
 }
 
 // ===== INIT =====
