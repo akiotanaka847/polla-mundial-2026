@@ -3085,13 +3085,15 @@ function renderBracket() {
 
 function renderKoMatchCard(m, roundId, pred) {
   pred = pred || {};
-  const locked = isKoMatchLocked(m) || pred.locked;
+  // Editable hasta 2h antes del partido (igual que grupos). Antes se bloqueaba
+  // al guardar (pred.locked), lo que cerraba la prediccion aunque faltaran horas.
+  const locked = isKoMatchLocked(m);
   const result = state.knockoutResults[m.id];
   const tie90 = pred.h90 != null && pred.h90 === pred.a90;
   const tie120 = pred.h120 != null && pred.h120 === pred.a120;
   const dis = locked ? 'disabled' : '';
 
-  let h = '<div class="match-card ' + (pred.locked ? 'saved' : '') + ' ' + (locked ? 'locked' : '') + '" id="ko-card-' + m.id + '">';
+  let h = '<div class="match-card ' + (pred.h90 != null ? 'saved' : '') + ' ' + (locked ? 'locked' : '') + '" id="ko-card-' + m.id + '">';
 
   // Meta
   h += '<div class="match-meta">';
@@ -3099,7 +3101,7 @@ function renderKoMatchCard(m, roundId, pred) {
   if (m.datetime) h += '<span class="match-datetime">' + formatMatchDate(m.datetime) + '</span>';
   if (result) h += '<span style="color:var(--success);font-size:0.7rem">&#10003; Jugado</span>';
   else if (locked) h += '<span class="lock-badge locked">&#128274; Cerrado</span>';
-  else if (pred.locked) h += '<span class="lock-badge approved">&#128274; Guardado</span>';
+  else if (pred.h90 != null) h += '<span class="lock-badge approved">&#10003; Guardado (editable)</span>';
   h += '</div>';
 
   // Equipos + marcador 90
@@ -3226,11 +3228,11 @@ function saveKnockoutPrediction(matchId, roundId) {
   }
 
   const preds = ensurePredictions();
-  pred.locked = true; // las predicciones KO se guardan como definitivas
+  // NO se bloquea al guardar: se puede cambiar hasta 2h antes del partido (como grupos).
   preds.knockout[matchId] = pred;
   saveState();
   syncPrediction(state.currentUser.id);
-  toast('Prediccion guardada!', 'success');
+  toast('Prediccion guardada! Puedes cambiarla hasta 2h antes del partido.', 'success');
   render();
 }
 
