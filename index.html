@@ -3099,6 +3099,11 @@ function renderKoMatchCard(m, roundId, pred) {
   h += '<div class="match-meta">';
   h += '<span class="round-badge">' + (m.label || 'Cruce') + '</span>';
   if (m.datetime) h += '<span class="match-datetime">' + formatMatchDate(m.datetime) + '</span>';
+  // Contador de cierre, igual que en grupos ("Faltan Xd" / "Cierra en Xh Ym")
+  if (!result && !locked) {
+    const li = getMatchLockStatus(m);
+    if (li.label) h += '<span class="match-status ' + (li.status === 'closing' ? 'closing' : 'open') + '">' + (li.status === 'closing' ? '&#9200; ' : '') + li.label + '</span>';
+  }
   if (result) h += '<span style="color:var(--success);font-size:0.7rem">&#10003; Jugado</span>';
   else if (locked) h += '<span class="lock-badge locked">&#128274; Cerrado</span>';
   else if (pred.h90 != null) h += '<span class="lock-badge approved">&#10003; Guardado (editable)</span>';
