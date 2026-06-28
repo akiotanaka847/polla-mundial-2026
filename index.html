@@ -3034,7 +3034,9 @@ function calcKnockoutPoints(pred, result, roundId, match) {
     pts += KO_POINTS.penalty;
   }
 
-  return Math.round(pts * mult);
+  // Puntaje exacto con decimales (ej. 7 x 1.5 = 10.5). Se redondea a 1 decimal
+  // solo para evitar ruido de coma flotante, no para perder los medios puntos.
+  return Math.round(pts * mult * 10) / 10;
 }
 
 function isKoMatchLocked(match) {
