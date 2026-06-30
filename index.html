@@ -3131,9 +3131,9 @@ function renderKoMatchCard(m, roundId, pred) {
   h += '<div class="match-teams">';
   h += '<div class="match-team home"><span class="flag">' + m.home.flag + '</span><span class="name">' + m.home.name + '</span></div>';
   h += '<div class="match-score">';
-  h += '<input type="number" min="0" max="20" id="ko-h90-' + m.id + '" value="' + (pred.h90 != null ? pred.h90 : '') + '" ' + dis + ' onchange="updateKoConditionals(\'' + m.id + '\')" placeholder="-">';
+  h += '<input type="number" min="0" max="20" id="ko-h90-' + m.id + '" value="' + (pred.h90 != null ? pred.h90 : '') + '" ' + dis + ' oninput="autoSaveKnockout(\'' + m.id + '\')" onchange="autoSaveKnockout(\'' + m.id + '\')" onblur="flushSaveKnockout(\'' + m.id + '\')" placeholder="-">';
   h += '<span class="vs">90\'</span>';
-  h += '<input type="number" min="0" max="20" id="ko-a90-' + m.id + '" value="' + (pred.a90 != null ? pred.a90 : '') + '" ' + dis + ' onchange="updateKoConditionals(\'' + m.id + '\')" placeholder="-">';
+  h += '<input type="number" min="0" max="20" id="ko-a90-' + m.id + '" value="' + (pred.a90 != null ? pred.a90 : '') + '" ' + dis + ' oninput="autoSaveKnockout(\'' + m.id + '\')" onchange="autoSaveKnockout(\'' + m.id + '\')" onblur="flushSaveKnockout(\'' + m.id + '\')" placeholder="-">';
   h += '</div>';
   h += '<div class="match-team away"><span class="flag">' + m.away.flag + '</span><span class="name">' + m.away.name + '</span></div>';
   h += '</div>';
@@ -3143,9 +3143,9 @@ function renderKoMatchCard(m, roundId, pred) {
   h += '<div style="font-size:0.72rem;color:var(--accent);text-align:center;margin-bottom:6px">&#9203; Tiempo extra (120\')</div>';
   h += '<div class="match-score" style="justify-content:center;gap:10px">';
   h += '<span style="font-size:0.8rem">' + m.home.flag + '</span>';
-  h += '<input type="number" min="0" max="20" id="ko-h120-' + m.id + '" value="' + (pred.h120 != null ? pred.h120 : '') + '" ' + dis + ' onchange="updateKoConditionals(\'' + m.id + '\')" placeholder="-">';
+  h += '<input type="number" min="0" max="20" id="ko-h120-' + m.id + '" value="' + (pred.h120 != null ? pred.h120 : '') + '" ' + dis + ' oninput="autoSaveKnockout(\'' + m.id + '\')" onchange="autoSaveKnockout(\'' + m.id + '\')" onblur="flushSaveKnockout(\'' + m.id + '\')" placeholder="-">';
   h += '<span class="vs">-</span>';
-  h += '<input type="number" min="0" max="20" id="ko-a120-' + m.id + '" value="' + (pred.a120 != null ? pred.a120 : '') + '" ' + dis + ' onchange="updateKoConditionals(\'' + m.id + '\')" placeholder="-">';
+  h += '<input type="number" min="0" max="20" id="ko-a120-' + m.id + '" value="' + (pred.a120 != null ? pred.a120 : '') + '" ' + dis + ' oninput="autoSaveKnockout(\'' + m.id + '\')" onchange="autoSaveKnockout(\'' + m.id + '\')" onblur="flushSaveKnockout(\'' + m.id + '\')" placeholder="-">';
   h += '<span style="font-size:0.8rem">' + m.away.flag + '</span>';
   h += '</div></div>';
 
@@ -3174,13 +3174,85 @@ function renderKoMatchCard(m, roundId, pred) {
   } else if (locked) {
     h += '<span style="font-size:0.78rem;color:var(--danger)">&#128274; Predicciones cerradas</span>';
   } else {
-    h += '<button class="btn btn-gold btn-sm" onclick="saveKnockoutPrediction(\'' + m.id + '\',\'' + roundId + '\')">Guardar</button>';
+    h += '<span class="autosave-hint" id="ko-hint-' + m.id + '">' + (pred.h90 != null ? '&#10003; Guardado (editable)' : 'Escribe el marcador (se guarda solo)') + '</span>';
+    h += '<button class="btn btn-outline btn-sm" style="margin-left:8px" onclick="saveKnockoutPrediction(\'' + m.id + '\',\'' + roundId + '\')">Guardar</button>';
   }
   h += '</div>';
 
   h += '</div>';
   return h;
 }
+
+// ===== AUTOGUARDADO ELIMINATORIAS =====
+// Igual que en grupos: guarda solo, sin depender del boton. En el movil esto
+// evita que se pierdan predicciones al cambiar de app o navegar.
+let koSaveTimers = {};
+
+// Devuelve si la prediccion KO esta completa para guardar (y el objeto).
+function koPredictionReady(matchId) {
+  const h90 = document.getElementById('ko-h90-' + matchId);
+  const a90 = document.getElementById('ko-a90-' + matchId);
+  if (!h90 || !a90 || h90.value === '' || a90.value === '') return { ready: false, reason: 'Escribe el marcador de los 90\'' };
+  const pred = { h90: parseInt(h90.value), a90: parseInt(a90.value), h120: null, a120: null, penWinner: null };
+  if (pred.h90 === pred.a90) {
+    const h120 = document.getElementById('ko-h120-' + matchId);
+    const a120 = document.getElementById('ko-a120-' + matchId);
+    if (!h120 || !a120 || h120.value === '' || a120.value === '') return { ready: false, reason: 'Empate en 90\': ingresa el alargue (120\')' };
+    pred.h120 = parseInt(h120.value); pred.a120 = parseInt(a120.value);
+    if (pred.h120 === pred.a120) {
+      let pen = tempPenWinner[matchId];
+      if (!pen) { const ex = (state.predictions[state.currentUser.id] || {}).knockout; if (ex && ex[matchId]) pen = ex[matchId].penWinner; }
+      if (!pen) return { ready: false, reason: 'Empate en 120\': elige quien gana en penales' };
+      pred.penWinner = pen;
+    }
+  }
+  return { ready: true, pred };
+}
+
+// Guarda YA si la prediccion esta completa. Devuelve true si guardo.
+function commitKnockoutPrediction(matchId) {
+  const m = findKoMatch(matchId);
+  if (!m || isKoMatchLocked(m)) return false;
+  const chk = koPredictionReady(matchId);
+  const hint = document.getElementById('ko-hint-' + matchId);
+  if (!chk.ready) { if (hint) { hint.innerHTML = chk.reason; hint.className = 'autosave-hint'; } return false; }
+  clearTimeout(koSaveTimers[matchId]);
+  const preds = ensurePredictions();
+  preds.knockout[matchId] = chk.pred;
+  saveState();
+  syncPrediction(state.currentUser.id);
+  if (hint) { hint.innerHTML = '&#10003; Guardado'; hint.className = 'autosave-hint saved'; }
+  const card = document.getElementById('ko-card-' + matchId);
+  if (card) card.classList.add('saved');
+  return true;
+}
+
+// oninput: mientras teclea -> actualiza bloques + debounce corto.
+function autoSaveKnockout(matchId) {
+  updateKoConditionals(matchId);
+  const m = findKoMatch(matchId);
+  if (m && isKoMatchLocked(m)) return;
+  const hint = document.getElementById('ko-hint-' + matchId);
+  if (hint) { hint.innerHTML = '&#8635; Guardando...'; hint.className = 'autosave-hint saving'; }
+  clearTimeout(koSaveTimers[matchId]);
+  koSaveTimers[matchId] = setTimeout(() => commitKnockoutPrediction(matchId), 400);
+}
+
+// onblur / al salir del campo: guardar AL INSTANTE.
+function flushSaveKnockout(matchId) {
+  commitKnockoutPrediction(matchId);
+}
+
+// Red de seguridad: guardar todo lo pendiente al mandar la app al fondo.
+function flushAllPendingKo() {
+  if (!state.currentUser) return;
+  document.querySelectorAll('input[id^="ko-h90-"]').forEach(h => {
+    const matchId = h.id.replace('ko-h90-', '');
+    if (matchId) commitKnockoutPrediction(matchId);
+  });
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushAllPendingKo(); });
+window.addEventListener('pagehide', flushAllPendingKo);
 
 function updateKoConditionals(matchId) {
   const h90 = document.getElementById('ko-h90-' + matchId);
@@ -3211,6 +3283,8 @@ function setPenWinner(matchId, code) {
     btns[0].className = 'btn btn-sm ' + (code === m.home.code ? 'btn-gold' : 'btn-outline');
     btns[1].className = 'btn btn-sm ' + (code === m.away.code ? 'btn-gold' : 'btn-outline');
   }
+  // elegir penales completa la prediccion -> autoguardar
+  flushSaveKnockout(matchId);
 }
 
 function findKoMatch(matchId) {
