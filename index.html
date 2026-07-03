@@ -3140,7 +3140,7 @@ function renderKoMatchCard(m, roundId, pred) {
 
   // Bloque alargue (120) - visible si empate en 90
   h += '<div id="ko-et-' + m.id + '" style="' + (tie90 ? '' : 'display:none;') + 'margin-top:10px;padding:10px;background:rgba(212,168,67,0.06);border-radius:var(--radius-sm)">';
-  h += '<div style="font-size:0.72rem;color:var(--accent);text-align:center;margin-bottom:6px">&#9203; Tiempo extra (120\')</div>';
+  h += '<div style="font-size:0.72rem;color:var(--accent);text-align:center;margin-bottom:6px">&#9203; Marcador TOTAL a los 120\' <span style="color:var(--text-muted)">(arrastra los del 90\')</span></div>';
   h += '<div class="match-score" style="justify-content:center;gap:10px">';
   h += '<span style="font-size:0.8rem">' + m.home.flag + '</span>';
   h += '<input type="number" min="0" max="20" id="ko-h120-' + m.id + '" value="' + (pred.h120 != null ? pred.h120 : '') + '" ' + dis + ' oninput="autoSaveKnockout(\'' + m.id + '\')" onchange="autoSaveKnockout(\'' + m.id + '\')" onblur="flushSaveKnockout(\'' + m.id + '\')" placeholder="-">';
@@ -3262,10 +3262,17 @@ function updateKoConditionals(matchId) {
   if (!h90 || !a90) return;
 
   const tie90 = h90.value !== '' && a90.value !== '' && parseInt(h90.value) === parseInt(a90.value);
+  const etWasHidden = etBlock && etBlock.style.display === 'none';
   if (etBlock) etBlock.style.display = tie90 ? '' : 'none';
 
   const h120 = document.getElementById('ko-h120-' + matchId);
   const a120 = document.getElementById('ko-a120-' + matchId);
+  // Al aparecer el alargue, prellenar con el marcador del 90' (arrastra los goles).
+  // Solo en la transicion a visible, para no re-rellenar si el usuario lo borra.
+  if (tie90 && etWasHidden && h120 && a120 && h120.value === '' && a120.value === '') {
+    h120.value = h90.value;
+    a120.value = a90.value;
+  }
   const tie120 = tie90 && h120 && a120 && h120.value !== '' && a120.value !== '' && parseInt(h120.value) === parseInt(a120.value);
   if (pkBlock) pkBlock.style.display = tie120 ? '' : 'none';
 }
