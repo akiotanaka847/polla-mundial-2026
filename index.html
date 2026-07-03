@@ -1646,9 +1646,16 @@ const KO_POINTS = {
   score90: 5,    // marcador exacto 90 min
   diff90: 3,     // diferencia de gol + ganador en 90' (sin marcador exacto), como en grupos
   score120: 3,   // si va a alargue: marcador exacto 120 min
-  diff120: 3,    // diferencia de gol + ganador en 120' (sin marcador exacto) - +3 igual que en 90'
+  diff120: 2,    // diferencia de gol + ganador en 120' (menor que el exacto 3, para premiar clavar el marcador)
   penalty: 3     // si va a penales: ganador correcto
 };
+
+// La diferencia de gol en 120' bajo de 3 a 2 pts (3 jul 2026). Estos cruces ya
+// se habian decidido ANTES del cambio, asi que conservan el +3 — no se le quitan
+// puntos a quien ya los gano. Los cruces que se decidan de aqui en adelante usan
+// KO_POINTS.diff120 (2).
+const DIFF120_LEGACY = 3;
+const DIFF120_GRANDFATHERED = ['round32_3', 'round32_4', 'round32_9', 'round32_14'];
 
 const LOCK_HOURS = 2;
 // El campeon se puede elegir hasta que TODOS los equipos jueguen su primer
@@ -3035,7 +3042,8 @@ function calcKnockoutPoints(pred, result, roundId, match) {
     if (pred.h120 === result.h120 && pred.a120 === result.a120) {
       pts += KO_POINTS.score120;
     } else if ((pred.h120 - pred.a120) === (result.h120 - result.a120) && Math.sign(pred.h120 - pred.a120) === Math.sign(result.h120 - result.a120)) {
-      pts += KO_POINTS.diff120;
+      // Cruces decididos antes del cambio de regla conservan el +3
+      pts += (match && DIFF120_GRANDFATHERED.includes(match.id)) ? DIFF120_LEGACY : KO_POINTS.diff120;
     }
   }
 
