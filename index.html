@@ -1657,7 +1657,7 @@ const KO_POINTS = {
 const DIFF120_LEGACY = 3;
 const DIFF120_GRANDFATHERED = ['round32_3', 'round32_4', 'round32_9', 'round32_14'];
 
-const LOCK_HOURS = 2;
+const LOCK_HOURS = 1;
 // El campeon se puede elegir hasta que TODOS los equipos jueguen su primer
 // partido (fin de la jornada 1: 18 jun 02:00Z). Cierra al iniciar la jornada 2.
 const CHAMPION_DEADLINE = '2026-06-18T16:00:00Z';
@@ -2797,7 +2797,7 @@ function confirmChampion(code) {
 
 function savePrediction(matchId) {
   const match = GROUP_MATCHES.find(m => m.id === matchId);
-  if (match && isMatchLocked(match)) return toast('Predicciones cerradas para este partido (2h antes del inicio)', 'error');
+  if (match && isMatchLocked(match)) return toast('Predicciones cerradas para este partido (1h antes del inicio)', 'error');
   const h = document.getElementById(`h-${matchId}`);
   const a = document.getElementById(`a-${matchId}`);
   if (h.value === '' || a.value === '') return toast('Ingresa ambos marcadores', 'error');
@@ -3111,7 +3111,7 @@ function renderBracket() {
 
 function renderKoMatchCard(m, roundId, pred) {
   pred = pred || {};
-  // Editable hasta 2h antes del partido (igual que grupos). Antes se bloqueaba
+  // Editable hasta 1h antes del partido (igual que grupos). Antes se bloqueaba
   // al guardar (pred.locked), lo que cerraba la prediccion aunque faltaran horas.
   const locked = isKoMatchLocked(m);
   const result = state.knockoutResults[m.id];
@@ -3316,7 +3316,7 @@ function findKoMatch(matchId) {
 function saveKnockoutPrediction(matchId, roundId) {
   const m = findKoMatch(matchId);
   if (!m) return;
-  if (isKoMatchLocked(m)) return toast('Este partido ya esta cerrado (2h antes del inicio).', 'error');
+  if (isKoMatchLocked(m)) return toast('Este partido ya esta cerrado (1h antes del inicio).', 'error');
 
   const h90 = document.getElementById('ko-h90-' + matchId).value;
   const a90 = document.getElementById('ko-a90-' + matchId).value;
@@ -3340,11 +3340,11 @@ function saveKnockoutPrediction(matchId, roundId) {
   }
 
   const preds = ensurePredictions();
-  // NO se bloquea al guardar: se puede cambiar hasta 2h antes del partido (como grupos).
+  // NO se bloquea al guardar: se puede cambiar hasta 1h antes del partido (como grupos).
   preds.knockout[matchId] = pred;
   saveState();
   syncPrediction(state.currentUser.id);
-  toast('Prediccion guardada! Puedes cambiarla hasta 2h antes del partido.', 'success');
+  toast('Prediccion guardada! Puedes cambiarla hasta 1h antes del partido.', 'success');
   render();
 }
 
@@ -3543,7 +3543,7 @@ function renderRules() {
       <div class="rule-card">
         <h3><span class="icon" style="background:rgba(239,68,68,0.15)">&#128274;</span> Bloqueos y Plazos</h3>
         <ul>
-          <li>Todas las predicciones se bloquean <strong>2 horas antes</strong> de cada partido</li>
+          <li>Todas las predicciones se bloquean <strong>1 hora antes</strong> de cada partido</li>
           <li>El campeon se elige <strong>UNA SOLA VEZ</strong> — no se puede cambiar. Plazo: hasta que todos jueguen su 1er partido (inicio jornada 2)</li>
           <li>Las eliminatorias se abren <strong>ronda por ronda</strong> cuando se definen los cruces</li>
           <li>Los cruces se importan automaticamente de la API (o el admin los arma)</li>
