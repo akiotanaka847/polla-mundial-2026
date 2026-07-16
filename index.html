@@ -1627,6 +1627,7 @@ const ROUND_MULTIPLIER = {
   round16: 2,
   quarters: 2.5,
   semis: 3,
+  thirdplace: 3,
   final: 4
 };
 
@@ -1637,6 +1638,7 @@ const KNOCKOUT_ROUNDS = [
   { id: 'round16', name: 'Octavos de Final', count: 8, apiStage: 'LAST_16', prev: 'round32' },
   { id: 'quarters', name: 'Cuartos de Final', count: 4, apiStage: 'QUARTER_FINALS', prev: 'round16' },
   { id: 'semis', name: 'Semifinales', count: 2, apiStage: 'SEMI_FINALS', prev: 'quarters' },
+  { id: 'thirdplace', name: 'Tercer Puesto', count: 1, apiStage: 'THIRD_PLACE', prev: 'semis' },
   { id: 'final', name: 'Final', count: 1, apiStage: 'FINAL', prev: 'semis' }
 ];
 
